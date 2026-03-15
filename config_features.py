@@ -1,8 +1,18 @@
+import os
+
 # Ruta de los imputs & outputs de datos
 INPUT_CSV_TABULAR  = 'data/colorectal_cancer_dataset.csv'
 OUTPUT_CSV_TABULAR = 'data/colorectal_cancer_full_dataset.csv'
 INPUT_CSV_TABULAR_PROCESSED = 'data/colorectal_cancer_full_dataset.csv'
 OUTPUT_MODEL_TABULAR = 'data/outputs/nn_model'
+
+
+# Path del modelo entrenado
+MODEL_DIR   = 'data/outputs/nn_model'
+MODEL_PATH  = os.path.join(MODEL_DIR, 'mlp_model.pkl')
+SCALER_PATH = os.path.join(MODEL_DIR, 'scaler.pkl')
+CONFIG_PATH = os.path.join(MODEL_DIR, 'model_config.pkl')
+
 
 # Columnas del dataset original que se eliminan devido a que no aportan al modelo de predicción
 COLUMNS_TO_DROP_TABULAR = [
@@ -20,6 +30,7 @@ COLUMNS_TO_DROP_TABULAR = [
     'Insurance_Status',
 ]
 
+
 # Columnas del dataset final
 FINAL_COLUMNS_TABULAR = [
     'Age', 'Gender', 'Family_History', 'Smoking_History', 'Alcohol_Consumption',
@@ -30,3 +41,4 @@ FINAL_COLUMNS_TABULAR = [
     'Age_Risk_Group', 'Diagnosis',
     'LC_Dietary', 'LC_Healthy', 'LC_High_Risk', 'LC_Sedentary',
 ]
+
