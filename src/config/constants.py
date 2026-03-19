@@ -5,6 +5,8 @@ Single source of truth for all magic values scattered across the codebase.
 
 from collections import OrderedDict
 
+from src.config.paths import paths
+
 # ═══════════════════════════════════════════════════════════
 #  IMAGE CLASSIFICATION
 # ═══════════════════════════════════════════════════════════
@@ -274,6 +276,67 @@ SOURCE_PREFIXES = {
     "cvc_": "cvc_clinicdb",
     "limuc_": "limuc",
     "curated_": "curated_colon",
+}
+
+
+DATASET_CONFIG = {
+    "hyperkvasir": {
+        "base_path": paths.DATA / "hyperkvasir_raw",
+        "search_dirs": [
+            "labeled-images",
+            "hyperkvasir_labeled/labeled-images",
+        ],
+        "description": "HyperKvasir: Dataset noruego de GI (Simula)",
+        "color": "#3498db",
+        "subcarpetas_interes": {
+            "normal": [
+                "lower-gi-tract/anatomical-landmarks/cecum",
+                "lower-gi-tract/anatomical-landmarks/retroflex-rectum",
+            ],
+            "polyp": [
+                "lower-gi-tract/pathological-findings/polyps",
+            ],
+            "inflammation": [
+                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-0-1",
+                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-1",
+                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-1-2",
+                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-2",
+                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-2-3",
+                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-3",
+            ],
+        },
+    },
+    "cvc_clinicdb": {
+        "base_path": paths.DATA / "raw" / "cvc_clinicdb",
+        "search_dirs": [
+            "Original",
+            "CVC-ClinicDB/Original",
+            "PNG/Original",
+            ".",
+        ],
+        "description": "CVC-ClinicDB: Pólipos (Barcelona)",
+        "color": "#e74c3c",
+        "subcarpetas_interes": {
+            "polyp": ["Original", "."],
+        },
+    },
+    "limuc": {
+        "base_path": paths.DATA / "raw" / "limuc",
+        "search_dirs": [],  # Estructura especial: paciente/mayo_score/
+        "description": "LIMUC: Colitis Ulcerosa por Mayo score",
+        "color": "#2ecc71",
+        "subcarpetas_interes": {
+            "normal": ["Mayo 0", "0"],
+            "inflammation": ["Mayo 1", "1", "Mayo 2", "2", "Mayo 3", "3"],
+        },
+    },
+    "curated_colon": {
+        "base_path": paths.DATA / "raw" / "curated_colon",
+        "search_dirs": [],
+        "description": "Curated Colon: Dataset curado para DL",
+        "color": "#f39c12",
+        "subcarpetas_interes": {},
+    },
 }
 
 

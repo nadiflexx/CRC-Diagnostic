@@ -39,11 +39,14 @@ Genera:
 from collections import Counter, defaultdict
 import json
 from pathlib import Path
-import sys
 import warnings
 
 import cv2
 import matplotlib
+
+from src.config.paths import paths
+from src.database.connection import get_db
+from src.database.repositories import TrainingImageRepository
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -52,14 +55,8 @@ from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.paths import paths
-from src.database.connection import get_db
-from src.database.repositories import TrainingImageRepository
-
-OUTPUT_DIR = PROJECT_ROOT / "notebooks" / "eda_processed_output"
+OUTPUT_DIR = paths.NOTEBOOKS / "eda_processed_output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 PROCESSED_DIR = paths.DATA / "colon_processed"
@@ -250,7 +247,7 @@ def analyze_inventory(records: list[dict]) -> str:
     counts = [split_counts.get(s, 0) for s in splits]
     colors = [SPLIT_COLORS[s] for s in splits]
     bars = ax.bar(splits, counts, color=colors, edgecolor="white")
-    for bar, count in zip(bars, counts):
+    for bar, count in zip(bars, counts, strict=True):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + max(counts) * 0.01,
@@ -272,7 +269,7 @@ def analyze_inventory(records: list[dict]) -> str:
     c_counts = [class_counts[c] for c in classes]
     c_colors = [CLASS_COLORS.get(c, "#95a5a6") for c in classes]
     bars = ax.bar(classes, c_counts, color=c_colors, edgecolor="white")
-    for bar, count in zip(bars, c_counts):
+    for bar, count in zip(bars, c_counts, strict=True):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + max(c_counts) * 0.01,
@@ -294,7 +291,7 @@ def analyze_inventory(records: list[dict]) -> str:
     s_counts = [source_counts[s] for s in sources]
     s_colors = [SOURCE_COLORS.get(s, "#95a5a6") for s in sources]
     bars = ax.bar(sources, s_counts, color=s_colors, edgecolor="white")
-    for bar, count in zip(bars, s_counts):
+    for bar, count in zip(bars, s_counts, strict=True):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + max(s_counts) * 0.01,
@@ -337,7 +334,7 @@ def analyze_class_balance(records: list[dict]) -> str:
     lines.append("=" * 80)
 
     splits = ["train", "val", "test"]
-    classes = sorted(set(r["class_name"] for r in records))
+    classes = sorted({r["class_name"] for r in records})
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
@@ -350,7 +347,7 @@ def analyze_class_balance(records: list[dict]) -> str:
         c_colors = [CLASS_COLORS.get(c, "#95a5a6") for c in classes]
 
         bars = ax.bar(classes, c_list, color=c_colors, edgecolor="white")
-        for bar, count in zip(bars, c_list):
+        for bar, count in zip(bars, c_list, strict=True):
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + 5,
@@ -401,11 +398,10 @@ def analyze_source_mixing(records: list[dict]) -> str:
     lines.append("  Cada clase en cada split debe tener ≥2 fuentes")
 
     splits = ["train", "val", "test"]
-    classes = sorted(set(r["class_name"] for r in records))
-    sources = sorted(set(r["source"] for r in records))
+    classes = sorted({r["class_name"] for r in records})
+    sources = sorted({r["source"] for r in records})
 
     n_splits = len(splits)
-    n_classes = len(classes)
 
     fig, axes = plt.subplots(n_splits, 1, figsize=(14, 4 * n_splits))
     if n_splits == 1:
@@ -421,7 +417,6 @@ def analyze_source_mixing(records: list[dict]) -> str:
 
         x = np.arange(len(classes))
         width = 0.8 / max(len(sources), 1)
-        bottoms = np.zeros(len(classes))
 
         for src_idx, source in enumerate(sources):
             counts = []
@@ -450,9 +445,7 @@ def analyze_source_mixing(records: list[dict]) -> str:
         ax.legend(fontsize=8)
 
         for cls in classes:
-            cls_sources = set(
-                r["source"] for r in split_records if r["class_name"] == cls
-            )
+            cls_sources = {r["source"] for r in split_records if r["class_name"] == cls}
             n_sources = len(cls_sources)
             counts_by_src = Counter(
                 r["source"] for r in split_records if r["class_name"] == cls
@@ -506,7 +499,9 @@ def analyze_resolutions(records: list[dict], img_stats: dict) -> str:
         lines.append("  Sin datos de resolución")
         return "\n".join(lines)
 
-    res_counts = Counter(f"{w}x{h}" for w, h in zip(all_widths, all_heights))
+    res_counts = Counter(
+        f"{w}x{h}" for w, h in zip(all_widths, all_heights, strict=True)
+    )
 
     lines.append("\n  Resoluciones encontradas:")
     for res, cnt in res_counts.most_common():
@@ -559,7 +554,7 @@ def analyze_color_post_clahe(records: list[dict], img_stats: dict) -> str:
 
     # Brillo por clase
     ax = axes[0, 0]
-    classes = sorted(set(r["class_name"] for r in records))
+    classes = sorted({r["class_name"] for r in records})
 
     for cls in classes:
         cls_records = [r for r in records if r["class_name"] == cls]
@@ -590,7 +585,7 @@ def analyze_color_post_clahe(records: list[dict], img_stats: dict) -> str:
 
     # Brillo por fuente
     ax = axes[0, 1]
-    sources = sorted(set(r["source"] for r in records))
+    sources = sorted({r["source"] for r in records})
 
     for src in sources:
         src_records = [r for r in records if r["source"] == src]
@@ -734,7 +729,7 @@ def analyze_residual_artifacts(records: list[dict], img_stats: dict) -> str:
 
     # % negro por fuente
     ax = axes[1]
-    sources = sorted(set(r["source"] for r in records))
+    sources = sorted({r["source"] for r in records})
     data_by_src = []
     labels_src = []
     colors_src = []
@@ -749,7 +744,7 @@ def analyze_residual_artifacts(records: list[dict], img_stats: dict) -> str:
 
     if data_by_src:
         bp = ax.boxplot(data_by_src, labels=labels_src, patch_artist=True)
-        for patch, color in zip(bp["boxes"], colors_src):
+        for patch, color in zip(bp["boxes"], colors_src, strict=True):
             patch.set_facecolor(color)
             patch.set_alpha(0.5)
     ax.set_ylabel("% Negro")
@@ -815,8 +810,8 @@ def analyze_features_by_class(records: list[dict], img_stats: dict) -> str:
     if not all_stats_flat:
         return "\n".join(lines)
 
-    classes = sorted(set(r["class_name"] for r in records))
-    sources = sorted(set(r["source"] for r in records))
+    classes = sorted({r["class_name"] for r in records})
+    sources = sorted({r["source"] for r in records})
     features = ["brightness", "contrast", "saturation", "sharpness"]
 
     fig, axes = plt.subplots(2, len(features), figsize=(5 * len(features), 10))
@@ -838,7 +833,7 @@ def analyze_features_by_class(records: list[dict], img_stats: dict) -> str:
 
         if data:
             bp = ax.boxplot(data, labels=labels, patch_artist=True)
-            for patch, color in zip(bp["boxes"], colors):
+            for patch, color in zip(bp["boxes"], colors, strict=True):
                 patch.set_facecolor(color)
                 patch.set_alpha(0.5)
         ax.set_title(f"{feat} (por clase)")
@@ -861,7 +856,7 @@ def analyze_features_by_class(records: list[dict], img_stats: dict) -> str:
 
         if data:
             bp = ax.boxplot(data, labels=labels, patch_artist=True)
-            for patch, color in zip(bp["boxes"], colors):
+            for patch, color in zip(bp["boxes"], colors, strict=True):
                 patch.set_facecolor(color)
                 patch.set_alpha(0.5)
         ax.set_title(f"{feat} (por fuente)")
@@ -903,8 +898,8 @@ def analyze_features_by_class(records: list[dict], img_stats: dict) -> str:
 
 def plot_samples_grid(records: list[dict]):
     """Grid: filas=clases, columnas=fuentes."""
-    classes = sorted(set(r["class_name"] for r in records))
-    sources = sorted(set(r["source"] for r in records))
+    classes = sorted({r["class_name"] for r in records})
+    sources = sorted({r["source"] for r in records})
 
     samples_per_cell = 2
     n_rows = len(classes) * samples_per_cell
@@ -1004,7 +999,6 @@ def analyze_tissue_only(records: list[dict]) -> str:
         lines.append(f"    {cls}: {cnt} crops")
 
     # Comparar negro residual
-    rng = np.random.RandomState(42)
     sample_standard = []
     sample_tissue = []
 
@@ -1119,7 +1113,7 @@ def generate_summary(records: list[dict], img_stats: dict) -> str:
     checks = []
 
     # Balance
-    classes = sorted(set(r["class_name"] for r in records))
+    classes = sorted({r["class_name"] for r in records})
     class_counts = Counter(r["class_name"] for r in records)
     if class_counts:
         ratio = max(class_counts.values()) / max(min(class_counts.values()), 1)
@@ -1132,11 +1126,11 @@ def generate_summary(records: list[dict], img_stats: dict) -> str:
     for split in splits:
         for cls in classes:
             n_sources = len(
-                set(
+                {
                     r["source"]
                     for r in records
                     if r["split"] == split and r["class_name"] == cls
-                )
+                }
             )
             if n_sources < 2:
                 mixing_ok = False

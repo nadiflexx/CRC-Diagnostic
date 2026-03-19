@@ -105,6 +105,10 @@ class PathSettings(BaseSettings):
     def ENSEMBLE_CONFIG_PATH(self) -> Path:
         return self.MODELS / "ensemble_config.json"
 
+    @property
+    def NOTEBOOKS(self) -> Path:
+        return self.ROOT / "notebooks"
+
     # ── Create all directories ──
     @model_validator(mode="after")
     def _create_dirs(self) -> "PathSettings":
@@ -115,6 +119,7 @@ class PathSettings(BaseSettings):
             self.HYPERKVASIR_RAW,
             self.MODELS,
             self.LOGS,
+            self.NOTEBOOKS,
         ]
         for d in directories:
             d.mkdir(parents=True, exist_ok=True)

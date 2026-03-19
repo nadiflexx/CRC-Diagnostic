@@ -36,7 +36,6 @@ Genera:
 from collections import Counter, defaultdict
 import json
 from pathlib import Path
-import sys
 import warnings
 
 import cv2
@@ -47,83 +46,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
 
+from src.config import constants
+from src.config.paths import paths
+
 warnings.filterwarnings("ignore")
 
 # ═══════════════════════════════════════════════════════════
 #  CONFIGURACIÓN
 # ═══════════════════════════════════════════════════════════
 
-# Ajustar al root de tu proyecto
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.paths import paths
-
-OUTPUT_DIR = PROJECT_ROOT / "notebooks" / "eda_output"
+OUTPUT_DIR = paths.NOTEBOOKS / "eda_output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-# Definición de datasets y estructura esperada
-DATASET_CONFIG = {
-    "hyperkvasir": {
-        "base_path": paths.DATA / "hyperkvasir_raw",
-        "search_dirs": [
-            "labeled-images",
-            "hyperkvasir_labeled/labeled-images",
-        ],
-        "description": "HyperKvasir: Dataset noruego de GI (Simula)",
-        "color": "#3498db",
-        "subcarpetas_interes": {
-            "normal": [
-                "lower-gi-tract/anatomical-landmarks/cecum",
-                "lower-gi-tract/anatomical-landmarks/retroflex-rectum",
-            ],
-            "polyp": [
-                "lower-gi-tract/pathological-findings/polyps",
-            ],
-            "inflammation": [
-                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-0-1",
-                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-1",
-                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-1-2",
-                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-2",
-                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-2-3",
-                "lower-gi-tract/pathological-findings/ulcerative-colitis-grade-3",
-            ],
-        },
-    },
-    "cvc_clinicdb": {
-        "base_path": paths.DATA / "raw" / "cvc_clinicdb",
-        "search_dirs": [
-            "Original",
-            "CVC-ClinicDB/Original",
-            "PNG/Original",
-            ".",
-        ],
-        "description": "CVC-ClinicDB: Pólipos (Barcelona)",
-        "color": "#e74c3c",
-        "subcarpetas_interes": {
-            "polyp": ["Original", "."],
-        },
-    },
-    "limuc": {
-        "base_path": paths.DATA / "raw" / "limuc",
-        "search_dirs": [],  # Estructura especial: paciente/mayo_score/
-        "description": "LIMUC: Colitis Ulcerosa por Mayo score",
-        "color": "#2ecc71",
-        "subcarpetas_interes": {
-            "normal": ["Mayo 0", "0"],
-            "inflammation": ["Mayo 1", "1", "Mayo 2", "2", "Mayo 3", "3"],
-        },
-    },
-    "curated_colon": {
-        "base_path": paths.DATA / "raw" / "curated_colon",
-        "search_dirs": [],
-        "description": "Curated Colon: Dataset curado para DL",
-        "color": "#f39c12",
-        "subcarpetas_interes": {},
-    },
-}
-
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -133,22 +67,22 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 def glob_images(directory: Path) -> list[Path]:
     """Busca imágenes recursivamente."""
-    images = []
+    images: list[Path] = []
     if not directory.exists():
         return images
     for f in sorted(directory.rglob("*")):
-        if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
+        if f.is_file() and f.suffix.lower() in constants.IMAGE_EXTENSIONS:
             images.append(f)
     return images
 
 
 def glob_images_flat(directory: Path) -> list[Path]:
     """Busca imágenes solo en el directorio (no recursivo)."""
-    images = []
+    images: list[Path] = []
     if not directory.exists():
         return images
     for f in sorted(directory.iterdir()):
-        if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
+        if f.is_file() and f.suffix.lower() in constants.IMAGE_EXTENSIONS:
             images.append(f)
     return images
 
@@ -304,7 +238,7 @@ def analyze_inventory(structures: dict) -> str:
     total_all = 0
 
     for name, struct in structures.items():
-        config = DATASET_CONFIG[name]
+        config = constants.DATASET_CONFIG[name]
         lines.append(f"\n{'─' * 60}")
         lines.append(f"📦 {config['description']}")
         lines.append(f"   Path: {struct['base_path']}")
@@ -342,10 +276,10 @@ def analyze_inventory(structures: dict) -> str:
         if struct["total_images"] > 0:
             names.append(name)
             counts.append(struct["total_images"])
-            colors.append(DATASET_CONFIG[name]["color"])
+            colors.append(constants.DATASET_CONFIG[name]["color"])
 
     axes[0].barh(names, counts, color=colors, edgecolor="white")
-    for i, (n, c) in enumerate(zip(names, counts)):
+    for i, (_, c) in enumerate(zip(names, counts, strict=True)):
         axes[0].text(c + max(counts) * 0.01, i, f"{c:,}", va="center")
     axes[0].set_xlabel("Número de imágenes")
     axes[0].set_title("Imágenes por Dataset (RAW)")
@@ -389,16 +323,15 @@ def analyze_resolutions(all_stats: dict) -> str:
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-    for idx, (dataset, stats) in enumerate(all_stats.items()):
+    for _, (dataset, stats) in enumerate(all_stats.items()):
         if not stats:
             continue
 
         widths = [s["width"] for s in stats]
         heights = [s["height"] for s in stats]
         ratios = [s["aspect_ratio"] for s in stats]
-        pixels = [s["pixels"] for s in stats]
 
-        color = DATASET_CONFIG[dataset]["color"]
+        color = constants.DATASET_CONFIG[dataset]["color"]
 
         lines.append(f"\n  {dataset}:")
         lines.append(
@@ -414,7 +347,7 @@ def analyze_resolutions(all_stats: dict) -> str:
             f"media={np.mean(ratios):.2f}"
         )
 
-        unique_res = Counter(f"{w}x{h}" for w, h in zip(widths, heights))
+        unique_res = Counter(f"{w}x{h}" for w, h in zip(widths, heights, strict=True))
         top3 = unique_res.most_common(3)
         lines.append("    Top resoluciones: " + ", ".join(f"{r}({c})" for r, c in top3))
 
@@ -431,7 +364,7 @@ def analyze_resolutions(all_stats: dict) -> str:
             alpha=0.3,
             s=10,
             label=dataset,
-            color=DATASET_CONFIG[dataset]["color"],
+            color=constants.DATASET_CONFIG[dataset]["color"],
         )
     ax.set_xlabel("Ancho (px)")
     ax.set_ylabel("Alto (px)")
@@ -450,7 +383,7 @@ def analyze_resolutions(all_stats: dict) -> str:
             bins=30,
             alpha=0.5,
             label=dataset,
-            color=DATASET_CONFIG[dataset]["color"],
+            color=constants.DATASET_CONFIG[dataset]["color"],
         )
     ax.set_xlabel("Aspect Ratio (ancho/alto)")
     ax.set_ylabel("Frecuencia")
@@ -469,10 +402,10 @@ def analyze_resolutions(all_stats: dict) -> str:
         mp = [s["pixels"] / 1e6 for s in stats]
         data_mp.append(mp)
         labels_mp.append(dataset)
-        colors_mp.append(DATASET_CONFIG[dataset]["color"])
+        colors_mp.append(constants.DATASET_CONFIG[dataset]["color"])
     if data_mp:
         bp = ax.boxplot(data_mp, labels=labels_mp, patch_artist=True)
-        for patch, color in zip(bp["boxes"], colors_mp):
+        for patch, color in zip(bp["boxes"], colors_mp, strict=True):
             patch.set_facecolor(color)
             patch.set_alpha(0.5)
     ax.set_ylabel("Megapíxeles")
@@ -489,10 +422,10 @@ def analyze_resolutions(all_stats: dict) -> str:
         fs = [s["file_size_kb"] for s in stats]
         data_fs.append(fs)
         labels_fs.append(dataset)
-        colors_fs.append(DATASET_CONFIG[dataset]["color"])
+        colors_fs.append(constants.DATASET_CONFIG[dataset]["color"])
     if data_fs:
         bp = ax.boxplot(data_fs, labels=labels_fs, patch_artist=True)
-        for patch, color in zip(bp["boxes"], colors_fs):
+        for patch, color in zip(bp["boxes"], colors_fs, strict=True):
             patch.set_facecolor(color)
             patch.set_alpha(0.5)
     ax.set_ylabel("Tamaño archivo (KB)")
@@ -534,7 +467,6 @@ def analyze_color(all_stats: dict) -> str:
         r = [s["r_mean"] for s in stats]
         g = [s["g_mean"] for s in stats]
         b = [s["b_mean"] for s in stats]
-        x = np.arange(3)
         means = [np.mean(r), np.mean(g), np.mean(b)]
         stds = [np.std(r), np.std(g), np.std(b)]
 
@@ -557,7 +489,7 @@ def analyze_color(all_stats: dict) -> str:
             alpha=0.3,
             s=10,
             label=dataset,
-            color=DATASET_CONFIG[dataset]["color"],
+            color=constants.DATASET_CONFIG[dataset]["color"],
         )
     ax.set_xlabel("Red mean")
     ax.set_ylabel("Green mean")
@@ -576,13 +508,13 @@ def analyze_color(all_stats: dict) -> str:
         br = [s["brightness"] for s in stats]
         data_br.append(br)
         labels_br.append(dataset)
-        colors_br.append(DATASET_CONFIG[dataset]["color"])
+        colors_br.append(constants.DATASET_CONFIG[dataset]["color"])
 
         lines.append(f"    Brillo: {np.mean(br):.1f}±{np.std(br):.1f}")
 
     if data_br:
         bp = ax.boxplot(data_br, labels=labels_br, patch_artist=True)
-        for patch, color in zip(bp["boxes"], colors_br):
+        for patch, color in zip(bp["boxes"], colors_br, strict=True):
             patch.set_facecolor(color)
             patch.set_alpha(0.5)
     ax.set_ylabel("Brillo (0-255)")
@@ -599,13 +531,13 @@ def analyze_color(all_stats: dict) -> str:
         sat = [s["saturation"] for s in stats]
         data_sat.append(sat)
         labels_sat.append(dataset)
-        colors_sat.append(DATASET_CONFIG[dataset]["color"])
+        colors_sat.append(constants.DATASET_CONFIG[dataset]["color"])
 
         lines.append(f"    Saturación: {np.mean(sat):.1f}±{np.std(sat):.1f}")
 
     if data_sat:
         bp = ax.boxplot(data_sat, labels=labels_sat, patch_artist=True)
-        for patch, color in zip(bp["boxes"], colors_sat):
+        for patch, color in zip(bp["boxes"], colors_sat, strict=True):
             patch.set_facecolor(color)
             patch.set_alpha(0.5)
     ax.set_ylabel("Saturación (0-255)")
@@ -622,7 +554,7 @@ def analyze_color(all_stats: dict) -> str:
             bins=30,
             alpha=0.5,
             label=dataset,
-            color=DATASET_CONFIG[dataset]["color"],
+            color=constants.DATASET_CONFIG[dataset]["color"],
         )
 
         lines.append(f"    Hue: {np.mean(hue):.1f}±{np.std(hue):.1f}")
@@ -672,7 +604,7 @@ def analyze_artifacts(all_stats: dict) -> str:
         black = [s["black_pct"] for s in stats]
         data_black.append(black)
         labels_black.append(dataset)
-        colors_black.append(DATASET_CONFIG[dataset]["color"])
+        colors_black.append(constants.DATASET_CONFIG[dataset]["color"])
 
         n_significant = sum(1 for b in black if b > 5)
         lines.append(f"\n  {dataset}:")
@@ -684,7 +616,7 @@ def analyze_artifacts(all_stats: dict) -> str:
 
     if data_black:
         bp = ax.boxplot(data_black, labels=labels_black, patch_artist=True)
-        for patch, color in zip(bp["boxes"], colors_black):
+        for patch, color in zip(bp["boxes"], colors_black, strict=True):
             patch.set_facecolor(color)
             patch.set_alpha(0.5)
     ax.set_ylabel("% Negro")
@@ -702,7 +634,7 @@ def analyze_artifacts(all_stats: dict) -> str:
             bins=50,
             alpha=0.5,
             label=dataset,
-            color=DATASET_CONFIG[dataset]["color"],
+            color=str(constants.DATASET_CONFIG[dataset]["color"]),
         )
     ax.set_xlabel("% Negro")
     ax.set_ylabel("Frecuencia")
@@ -722,7 +654,7 @@ def analyze_artifacts(all_stats: dict) -> str:
         green = [s["green_pct"] for s in stats]
         data_green.append(green)
         labels_green.append(dataset)
-        colors_green.append(DATASET_CONFIG[dataset]["color"])
+        colors_green.append(constants.DATASET_CONFIG[dataset]["color"])
 
         n_green = sum(1 for g in green if g > 1)
         lines.append(f"    Verde: media={np.mean(green):.2f}%, max={max(green):.2f}%")
@@ -733,7 +665,7 @@ def analyze_artifacts(all_stats: dict) -> str:
 
     if data_green:
         bp = ax.boxplot(data_green, labels=labels_green, patch_artist=True)
-        for patch, color in zip(bp["boxes"], colors_green):
+        for patch, color in zip(bp["boxes"], colors_green, strict=True):
             patch.set_facecolor(color)
             patch.set_alpha(0.5)
     ax.set_ylabel("% Verde")
@@ -813,7 +745,7 @@ def analyze_sharpness(all_stats: dict) -> str:
             bins=50,
             alpha=0.5,
             label=dataset,
-            color=DATASET_CONFIG[dataset]["color"],
+            color=str(constants.DATASET_CONFIG[dataset]["color"]),
         )
 
         n_blurry = sum(1 for s in sharp if s < 100)
@@ -996,7 +928,7 @@ def analyze_domain_gap(all_stats: dict) -> str:
     lines.append(f"\n  {'':15s}" + "".join(f"{d:>15s}" for d in datasets))
     for i, d1 in enumerate(datasets):
         row = f"  {d1:15s}"
-        for j, d2 in enumerate(datasets):
+        for j, _ in enumerate(datasets):
             row += f"{dist_matrix[i, j]:15.2f}"
         lines.append(row)
 
@@ -1024,14 +956,14 @@ def analyze_domain_gap(all_stats: dict) -> str:
             values,
             "o-",
             label=dataset,
-            color=DATASET_CONFIG[dataset]["color"],
+            color=constants.DATASET_CONFIG[dataset]["color"],
             linewidth=2,
         )
         ax.fill(
             angles,
             values,
             alpha=0.1,
-            color=DATASET_CONFIG[dataset]["color"],
+            color=constants.DATASET_CONFIG[dataset]["color"],
         )
 
     ax.set_xticks(angles[:-1])
@@ -1067,12 +999,12 @@ def analyze_class_mapping(structures: dict) -> str:
     lines.append("=" * 80)
     lines.append("  Clases: Normal (0) | Pólipo (1) | Inflamación (2)")
 
-    class_totals = defaultdict(lambda: defaultdict(int))
+    class_totals: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     # HyperKvasir
     hk_struct = structures.get("hyperkvasir", {})
     if hk_struct.get("exists"):
-        for class_name, subpaths in DATASET_CONFIG["hyperkvasir"][
+        for class_name, subpaths in constants.DATASET_CONFIG["hyperkvasir"][
             "subcarpetas_interes"
         ].items():
             for sp in subpaths:
@@ -1089,7 +1021,6 @@ def analyze_class_mapping(structures: dict) -> str:
     limuc_struct = structures.get("limuc", {})
     if limuc_struct.get("exists"):
         for folder, info in limuc_struct.get("folders", {}).items():
-            folder_lower = folder.lower()
             # Detectar Mayo score
             for score in ["0"]:
                 if f"/{score}" in folder or folder.endswith(f"/{score}"):
@@ -1119,11 +1050,10 @@ def analyze_class_mapping(structures: dict) -> str:
 
     class_order = ["normal", "polyp", "inflammation"]
     source_order = ["hyperkvasir", "cvc_clinicdb", "limuc", "curated_colon"]
-    source_colors = [DATASET_CONFIG[s]["color"] for s in source_order]
+    source_colors = [constants.DATASET_CONFIG[s]["color"] for s in source_order]
 
     x = np.arange(len(class_order))
     width = 0.2
-    bottoms = np.zeros(len(class_order))
 
     for s_idx, source in enumerate(source_order):
         counts = [class_totals[cls].get(source, 0) for cls in class_order]
@@ -1195,7 +1125,7 @@ def run_eda():
     # ── 1. Descubrir estructura ──
     print("\n📂 Descubriendo estructura de datasets...")
     structures = {}
-    for name, config in DATASET_CONFIG.items():
+    for name, config in constants.DATASET_CONFIG.items():
         print(f"  Escaneando {name}...")
         structures[name] = discover_dataset_structure(name, config)
         print(
