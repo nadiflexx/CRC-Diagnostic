@@ -62,3 +62,20 @@ def run_diagnosis(payload: dict) -> dict | None:
         return _handle_response(resp)
     except requests.ConnectionError:
         return None
+
+
+def create_patient(patient_data: dict) -> dict | None:
+    """Creates a new patient via API."""
+    try:
+        resp = requests.post(
+            f"{API_BASE_URL}/patients/",
+            json=patient_data,
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            return resp.json()
+        st.error(f"❌ Error del servidor: {resp.text}")
+        return None
+    except requests.ConnectionError:
+        st.error("⚠️ No se pudo conectar con el servidor.")
+        return None

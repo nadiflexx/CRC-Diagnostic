@@ -4,6 +4,8 @@ src/diagnosis/engine.py
 Motor de diagnóstico multimodal con Ensemble.
 Carga Model A + Model B (si existe) y combina predicciones.
 Si Model B no existe, funciona solo con Model A (backward compatible).
+
+ACTUALIZADO: Usa pytorch-grad-cam (GradCAM++, HiResCAM, etc.)
 """
 
 import base64
@@ -29,9 +31,9 @@ from src.data.processing.tissue_only_preprocessor import (
     TissueOnlyPreprocessor,
 )
 from src.evaluation.gradcam import (
-    GradCAM,
+    CamMethod,
     create_heatmap_overlay,
-    find_target_layer,
+    generate_gradcam,
 )
 from src.models.image_classifier import ColonCancerClassifier
 from src.models.polyp_segmenter import ColonPolypSegmenter
@@ -41,9 +43,12 @@ from src.models.tissue_classifier import (
 
 
 class DiagnosisEngine:
-    def __init__(self):
+    """Motor de diagnóstico multimodal con ensemble adaptativo."""
+
+    def __init__(self, cam_method: CamMethod = "gradcam++"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.models_loaded = False
+        self.cam_method: CamMethod = cam_method
 
         # Model A (context-aware)
         self.image_classifier = None
@@ -75,20 +80,18 @@ class DiagnosisEngine:
         self.standardizer = MultiSourceStandardizer(target_size=model_cfg.IMAGE_SIZE)
         self.tissue_preprocessor = None  # Se carga lazy
 
+    # ═════════════════════════════════════════════
+    #  CARGA DE MODELOS
+    # ═════════════════════════════════════════════
+
     def load_models(self):
+        """Carga todos los modelos del motor."""
         logger.info("Cargando modelos del motor de diagnóstico…")
 
-        # ── Model A (Clasificador principal) ──
         self._load_model_a()
-
-        # ── Model B (Tissue-only) + Ensemble config ──
         self._load_model_b()
         self._load_ensemble_config()
-
-        # ── Segmentador ──
         self._load_segmenter()
-
-        # ── Tabular ──
         self._load_tabular()
 
         self.models_loaded = True
@@ -96,10 +99,10 @@ class DiagnosisEngine:
         if self.ensemble_available:
             logger.info(
                 f"✅ Motor listo (ENSEMBLE: α={self.ensemble_alpha:.2f}, "
-                f"β={self.ensemble_beta:.2f})"
+                f"β={self.ensemble_beta:.2f}, CAM={self.cam_method})"
             )
         else:
-            logger.info("✅ Motor listo (Model A solo)")
+            logger.info(f"✅ Motor listo (Model A solo, CAM={self.cam_method})")
 
     def _load_model_a(self):
         """Carga Model A (clasificador principal)."""
@@ -177,11 +180,9 @@ class DiagnosisEngine:
 
     def _load_ensemble_config(self):
         """Carga pesos del ensemble si existen."""
-
         config_path = paths.ENSEMBLE_CONFIG_PATH
         if not config_path.exists():
             if self.ensemble_available:
-                # Model B existe pero no hay config → 50/50
                 self.ensemble_alpha = 0.5
                 self.ensemble_beta = 0.5
                 logger.info("  ℹ️  Sin ensemble_config.json → α=0.5, β=0.5")
@@ -239,7 +240,6 @@ class DiagnosisEngine:
             self.tissue_preprocessor = TissueOnlyPreprocessor(
                 target_size=model_cfg.IMAGE_SIZE, n_crops=5
             )
-
         return self.tissue_preprocessor.process_image(image_bgr)
 
     # ═════════════════════════════════════════════
@@ -320,6 +320,7 @@ class DiagnosisEngine:
         image_path: str | None = None,
         patient_id: int | None = None,
     ) -> dict:
+        """Ejecuta diagnóstico multimodal completo."""
         if not self.models_loaded:
             self.load_models()
 
@@ -471,7 +472,17 @@ class DiagnosisEngine:
             logger.error(traceback.format_exc())
             return None
 
+    # ═════════════════════════════════════════════
+    #  ATTENTION RATIO (usa pytorch-grad-cam)
+    # ═════════════════════════════════════════════
+
     def _get_attention_ratio(self, image_bgr: np.ndarray) -> float:
+        """
+        Calcula ratio de atención centro/borde usando pytorch-grad-cam.
+
+        Usa GradCAM (vanilla) para velocidad en el cálculo adaptativo.
+        Para visualización se usa el método configurado (gradcam++, etc).
+        """
         try:
             preprocessed = self._preprocess_image(image_bgr)
             preprocessed_rgb = cv2.cvtColor(preprocessed, cv2.COLOR_BGR2RGB)
@@ -483,149 +494,147 @@ class DiagnosisEngine:
                 .to(self.device)
             )
 
-            target_layer = find_target_layer(self.image_classifier)
-            grad_cam = GradCAM(self.image_classifier, target_layer)
+            # ═══ NUEVO: usa generate_gradcam ═══
+            # Para attention ratio usamos "gradcam" (más rápido)
+            cam, _ = generate_gradcam(
+                model=self.image_classifier,
+                input_tensor=tensor,
+                target_class=None,
+                method="gradcam",
+            )
 
-            try:
-                cam, _, _ = grad_cam.generate(tensor)
+            h_cam, w_cam = cam.shape
+            h_img, w_img = gray.shape
 
-                h_cam, w_cam = cam.shape
-                h_img, w_img = gray.shape
+            margin_h = max(1, int(h_cam * 0.25))
+            margin_w = max(1, int(w_cam * 0.25))
 
-                margin_h = max(1, int(h_cam * 0.25))
-                margin_w = max(1, int(w_cam * 0.25))
+            center_mask = np.zeros((h_cam, w_cam), dtype=bool)
+            center_mask[
+                margin_h : h_cam - margin_h,
+                margin_w : w_cam - margin_w,
+            ] = True
 
-                center_mask = np.zeros((h_cam, w_cam), dtype=bool)
-                center_mask[
-                    margin_h : h_cam - margin_h,
-                    margin_w : w_cam - margin_w,
-                ] = True
+            # Pointing
+            max_pos = np.unravel_index(cam.argmax(), cam.shape)
+            max_in_center = center_mask[max_pos[0], max_pos[1]]
 
-                # Pointing
-                max_pos = np.unravel_index(cam.argmax(), cam.shape)
-                max_in_center = center_mask[max_pos[0], max_pos[1]]
+            # Top 10%
+            threshold_val = np.percentile(cam, 90)
+            hot_pixels = cam >= threshold_val
+            hot_total = hot_pixels.sum()
 
-                # Top 10%
-                threshold_val = np.percentile(cam, 90)
-                hot_pixels = cam >= threshold_val
-                hot_total = hot_pixels.sum()
+            if hot_total == 0:
+                logger.info("  📊 Attention: sin activación → 1.5")
+                return 1.5
 
-                if hot_total == 0:
-                    logger.info("  📊 Attention: sin activación → 1.5")
-                    return 1.5
+            hot_in_center = (hot_pixels & center_mask).sum()
+            hot_in_border = (hot_pixels & ~center_mask).sum()
 
-                hot_in_center = (hot_pixels & center_mask).sum()
-                hot_in_border = (hot_pixels & ~center_mask).sum()
+            hot_ratio = float(hot_in_center) / max(float(hot_in_border), 1.0)
 
-                hot_ratio = float(hot_in_center) / max(float(hot_in_border), 1.0)
+            # Resize CAM para comparar con imagen
+            cam_resized = cv2.resize(
+                cam,
+                (w_img, h_img),
+                interpolation=cv2.INTER_LINEAR,
+            )
+            hot_resized = cam_resized >= np.percentile(cam_resized, 90)
 
-                # Resize CAM para comparar con imagen
-                cam_resized = cv2.resize(
-                    cam,
-                    (w_img, h_img),
-                    interpolation=cv2.INTER_LINEAR,
-                )
-                hot_resized = cam_resized >= np.percentile(cam_resized, 90)
+            img_margin_h = max(1, int(h_img * 0.25))
+            img_margin_w = max(1, int(w_img * 0.25))
+            center_mask_img = np.zeros((h_img, w_img), dtype=bool)
+            center_mask_img[
+                img_margin_h : h_img - img_margin_h,
+                img_margin_w : w_img - img_margin_w,
+            ] = True
 
-                img_margin_h = max(1, int(h_img * 0.25))
-                img_margin_w = max(1, int(w_img * 0.25))
-                center_mask_img = np.zeros((h_img, w_img), dtype=bool)
-                center_mask_img[
-                    img_margin_h : h_img - img_margin_h,
-                    img_margin_w : w_img - img_margin_w,
-                ] = True
+            hot_border_mask = hot_resized & ~center_mask_img
 
-                hot_border_mask = hot_resized & ~center_mask_img
+            # ══════════════════════════════════════
+            # SOLO penalizar si hay NEGRO donde mira
+            # Si hay tejido (brillo > 60) → NO penalizar
+            # ══════════════════════════════════════
 
-                # ══════════════════════════════════════
-                # SOLO penalizar si hay NEGRO donde mira
-                # Si hay tejido (brillo > 60) → NO penalizar
-                # ══════════════════════════════════════
+            border_brightness = -1.0
+            if hot_border_mask.sum() > 0:
+                border_brightness = float(gray[hot_border_mask].mean())
 
-                border_brightness = -1.0
-                if hot_border_mask.sum() > 0:
-                    border_brightness = float(gray[hot_border_mask].mean())
+                if border_brightness < 30:
+                    hot_ratio *= 0.3
+                    logger.info(
+                        f"  📊 🚨 NEGRO en borde "
+                        f"(brillo={border_brightness:.0f}) "
+                        f"→ ratio×0.3"
+                    )
+                elif border_brightness < 60:
+                    hot_ratio *= 0.6
+                    logger.info(
+                        f"  📊 ⚠️ Gris oscuro en borde "
+                        f"(brillo={border_brightness:.0f}) "
+                        f"→ ratio×0.6"
+                    )
+                else:
+                    logger.info(
+                        f"  📊 ✅ Tejido en borde "
+                        f"(brillo={border_brightness:.0f}) "
+                        f"→ sin penalización"
+                    )
 
-                    if border_brightness < 30:
-                        # Mira negro → shortcut seguro
-                        hot_ratio *= 0.3
-                        logger.info(
-                            f"  📊 🚨 NEGRO en borde "
-                            f"(brillo={border_brightness:.0f}) "
-                            f"→ ratio×0.3"
-                        )
-                    elif border_brightness < 60:
-                        # Zona gris oscura → sospechoso
-                        hot_ratio *= 0.6
-                        logger.info(
-                            f"  📊 ⚠️ Gris oscuro en borde "
-                            f"(brillo={border_brightness:.0f}) "
-                            f"→ ratio×0.6"
-                        )
-                    else:
-                        # Tejido brillante → legítimo
-                        logger.info(
-                            f"  📊 ✅ Tejido en borde "
-                            f"(brillo={border_brightness:.0f}) "
-                            f"→ sin penalización"
-                        )
+            # Verificar máximo
+            max_brightness = -1.0
+            if not max_in_center:
+                max_y = int(max_pos[0] / h_cam * h_img)
+                max_x = int(max_pos[1] / w_cam * w_img)
+                max_y = min(max_y, h_img - 1)
+                max_x = min(max_x, w_img - 1)
 
-                # Verificar máximo
-                max_brightness = -1.0
-                if not max_in_center:
-                    max_y = int(max_pos[0] / h_cam * h_img)
-                    max_x = int(max_pos[1] / w_cam * w_img)
-                    max_y = min(max_y, h_img - 1)
-                    max_x = min(max_x, w_img - 1)
+                wy1 = max(0, max_y - 5)
+                wy2 = min(h_img, max_y + 6)
+                wx1 = max(0, max_x - 5)
+                wx2 = min(w_img, max_x + 6)
+                max_brightness = float(gray[wy1:wy2, wx1:wx2].mean())
 
-                    wy1 = max(0, max_y - 5)
-                    wy2 = min(h_img, max_y + 6)
-                    wx1 = max(0, max_x - 5)
-                    wx2 = min(w_img, max_x + 6)
-                    max_brightness = float(gray[wy1:wy2, wx1:wx2].mean())
+                if max_brightness < 30:
+                    hot_ratio *= 0.3
+                    logger.info(
+                        f"  📊 🚨 Máximo en NEGRO "
+                        f"(brillo={max_brightness:.0f}) "
+                        f"→ ratio×0.3"
+                    )
+                elif max_brightness < 60:
+                    hot_ratio *= 0.5
+                    logger.info(
+                        f"  📊 ⚠️ Máximo en gris "
+                        f"(brillo={max_brightness:.0f}) "
+                        f"→ ratio×0.5"
+                    )
+                else:
+                    logger.info(
+                        f"  📊 ✅ Máximo en tejido "
+                        f"(brillo={max_brightness:.0f}) "
+                        f"→ sin penalización"
+                    )
 
-                    if max_brightness < 30:
-                        # Máximo en negro → shortcut
-                        hot_ratio *= 0.3
-                        logger.info(
-                            f"  📊 🚨 Máximo en NEGRO "
-                            f"(brillo={max_brightness:.0f}) "
-                            f"→ ratio×0.3"
-                        )
-                    elif max_brightness < 60:
-                        # Máximo en gris → sospechoso
-                        hot_ratio *= 0.5
-                        logger.info(
-                            f"  📊 ⚠️ Máximo en gris "
-                            f"(brillo={max_brightness:.0f}) "
-                            f"→ ratio×0.5"
-                        )
-                    else:
-                        # Máximo en tejido real → NO penalizar
-                        logger.info(
-                            f"  📊 ✅ Máximo en tejido "
-                            f"(brillo={max_brightness:.0f}) "
-                            f"→ sin penalización"
-                        )
+            logger.info(
+                f"  📊 FINAL: center={max_in_center}, "
+                f"hot_c={hot_in_center}, "
+                f"hot_b={hot_in_border}, "
+                f"border_br={border_brightness:.0f}, "
+                f"max_br={max_brightness:.0f}, "
+                f"ratio={hot_ratio:.2f}"
+            )
 
-                logger.info(
-                    f"  📊 FINAL: center={max_in_center}, "
-                    f"hot_c={hot_in_center}, "
-                    f"hot_b={hot_in_border}, "
-                    f"border_br={border_brightness:.0f}, "
-                    f"max_br={max_brightness:.0f}, "
-                    f"ratio={hot_ratio:.2f}"
-                )
-
-                return float(hot_ratio)
-
-            finally:
-                grad_cam.remove_hooks()
+            return float(hot_ratio)
 
         except Exception as e:
             logger.warning(f"  ⚠️ Attention ratio FALLÓ: {e}")
             logger.warning(traceback.format_exc())
             return 1.5
+
+    # ═════════════════════════════════════════════
+    #  SEGMENTACIÓN
+    # ═════════════════════════════════════════════
 
     def _run_segmentation(self, original: np.ndarray) -> tuple[bool, str | None, int]:
         """
@@ -644,7 +653,6 @@ class DiagnosisEngine:
                 .to(self.device)
             )
 
-            # Predicción con TTA si está disponible
             if hasattr(self.image_segmenter, "predict_mask_tta"):
                 masks, probs = self.image_segmenter.predict_mask_tta(
                     tensor, threshold=0.5
@@ -657,7 +665,6 @@ class DiagnosisEngine:
             if mask_np.sum() <= 20:
                 return False, None, 0
 
-            # Post-processing: separar instancias + limpiar
             if hasattr(self.image_segmenter, "postprocess_instances"):
                 instance_mask, n_polyps = self.image_segmenter.postprocess_instances(
                     mask_np, min_area=100
@@ -669,21 +676,15 @@ class DiagnosisEngine:
             if n_polyps == 0:
                 return False, None, 0
 
-            # Overlay sobre imagen PROCESADA (alineada con la máscara)
-            # Convertir procesada de vuelta a BGR para overlay
             overlay = preprocessed.copy()
 
-            # Crear máscara binaria (cualquier instancia > 0)
             binary_mask = (instance_mask > 0).astype(np.float32)
-
-            # Resize máscara al tamaño de la imagen procesada
             mask_resized = cv2.resize(
                 binary_mask,
                 (overlay.shape[1], overlay.shape[0]),
                 interpolation=cv2.INTER_NEAREST,
             )
 
-            # Crear overlay rojo semi-transparente
             red_overlay = overlay.copy()
             red_overlay[:, :, 2] = np.clip(
                 red_overlay[:, :, 2].astype(int) + 100, 0, 255
@@ -691,14 +692,12 @@ class DiagnosisEngine:
             red_overlay[:, :, 0] = (red_overlay[:, :, 0] * 0.5).astype(np.uint8)
             red_overlay[:, :, 1] = (red_overlay[:, :, 1] * 0.5).astype(np.uint8)
 
-            # Aplicar solo donde hay máscara
             idx = mask_resized > 0.5
             alpha = 0.5
             overlay[idx] = cv2.addWeighted(overlay, 1 - alpha, red_overlay, alpha, 0)[
                 idx
             ]
 
-            # Dibujar contornos para cada instancia
             for polyp_id in range(1, n_polyps + 1):
                 single_mask = (instance_mask == polyp_id).astype(np.uint8) * 255
                 single_resized = cv2.resize(
@@ -713,7 +712,6 @@ class DiagnosisEngine:
                 )
                 cv2.drawContours(overlay, contours, -1, (0, 255, 0), 2)
 
-            # Guardar reporte
             ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             out_dir = paths.REPORTS
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -730,7 +728,12 @@ class DiagnosisEngine:
             logger.error(traceback.format_exc())
             return False, None, 0
 
+    # ═════════════════════════════════════════════
+    #  ANÁLISIS TABULAR
+    # ═════════════════════════════════════════════
+
     def _analyze_tabular(self, patient_data: dict) -> dict | None:
+        """Análisis de datos clínicos tabulares."""
         try:
             df = pd.DataFrame([patient_data])
             expected_cols = (
@@ -780,6 +783,7 @@ class DiagnosisEngine:
     # ═════════════════════════════════════════════
 
     def _get_final_diagnosis_text(self, img_class: str, score: float) -> str:
+        """Texto de diagnóstico final."""
         if img_class == "polyp":
             return "Pólipo Adenomatoso Detectado"
         if img_class == "inflammation":
@@ -789,6 +793,7 @@ class DiagnosisEngine:
         return "Mucosa Sana"
 
     def _get_risk_level(self, score: float) -> dict:
+        """Nivel de riesgo con color y porcentaje."""
         if score >= 0.7:
             return {
                 "level": "ALTO",
@@ -811,6 +816,7 @@ class DiagnosisEngine:
         }
 
     def _get_recommendations(self, score: float, img_class: str) -> list:
+        """Recomendaciones clínicas."""
         recs = []
         if img_class == "polyp":
             recs.append("🔴 URGENTE: Programar polipectomía para resección de pólipo.")
@@ -821,6 +827,10 @@ class DiagnosisEngine:
         else:
             recs.append("🟢 Continuar con screening rutinario.")
         return recs
+
+    # ═════════════════════════════════════════════
+    #  GRAD-CAM PARA VISUALIZACIÓN (pytorch-grad-cam)
+    # ═════════════════════════════════════════════
 
     def _generate_gradcam(
         self,
@@ -834,6 +844,9 @@ class DiagnosisEngine:
 
         La fusión usa los MISMOS α, β que se usaron para la predicción,
         no los pesos base. Así el heatmap refleja fielmente la decisión.
+
+        Usa el método CAM configurado (gradcam++, hirescam, etc.)
+        para máxima calidad en la visualización.
 
         Args:
             image_bgr: Imagen original BGR
@@ -859,16 +872,14 @@ class DiagnosisEngine:
         # ── Grad-CAM Model A ──
         cam_a = None
         try:
-            target_a = find_target_layer(self.image_classifier)
-            gcam_a = GradCAM(self.image_classifier, target_a)
-            try:
-                cam_a, _, _ = gcam_a.generate(tensor_a, target_class=pred_idx)
-                overlay_a = create_heatmap_overlay(
-                    preprocessed_a_rgb, cam_a, alpha=0.45
-                )
-                result["gradcam_a"] = self._numpy_to_base64(overlay_a)
-            finally:
-                gcam_a.remove_hooks()
+            cam_a, _ = generate_gradcam(
+                model=self.image_classifier,
+                input_tensor=tensor_a,
+                target_class=pred_idx,
+                method=self.cam_method,
+            )
+            overlay_a = create_heatmap_overlay(preprocessed_a_rgb, cam_a, alpha=0.45)
+            result["gradcam_a"] = self._numpy_to_base64(overlay_a)
         except Exception as e:
             logger.warning(f"  ⚠️ Grad-CAM A falló: {e}")
 
@@ -890,32 +901,29 @@ class DiagnosisEngine:
                         .to(self.device)
                     )
 
-                    target_b = find_target_layer(self.tissue_classifier)
-                    gcam_b = GradCAM(self.tissue_classifier, target_b)
-                    try:
-                        cam_b, _, _ = gcam_b.generate(tensor_b, target_class=pred_idx)
-                        overlay_b = create_heatmap_overlay(crop_rgb, cam_b, alpha=0.45)
-                        result["gradcam_b"] = self._numpy_to_base64(overlay_b)
+                    cam_b, _ = generate_gradcam(
+                        model=self.tissue_classifier,
+                        input_tensor=tensor_b,
+                        target_class=pred_idx,
+                        method=self.cam_method,
+                    )
+                    overlay_b = create_heatmap_overlay(crop_rgb, cam_b, alpha=0.45)
+                    result["gradcam_b"] = self._numpy_to_base64(overlay_b)
 
-                        if cam_a is not None:
-                            cam_b_resized = cv2.resize(
-                                cam_b,
-                                (cam_a.shape[1], cam_a.shape[0]),
-                                interpolation=cv2.INTER_LINEAR,
-                            )
-                    finally:
-                        gcam_b.remove_hooks()
+                    if cam_a is not None:
+                        cam_b_resized = cv2.resize(
+                            cam_b,
+                            (cam_a.shape[1], cam_a.shape[0]),
+                            interpolation=cv2.INTER_LINEAR,
+                        )
             except Exception as e:
                 logger.warning(f"  ⚠️ Grad-CAM B falló: {e}")
 
         # ── Fusión con pesos ADAPTATIVOS reales ──
         if cam_a is not None:
             if cam_b_resized is not None and beta > 0.01:
-                # Fusión ponderada con los MISMOS pesos
-                # que se usaron para la predicción
                 cam_fusion = alpha * cam_a + beta * cam_b_resized
 
-                # Re-normalizar a [0, 1]
                 cam_min = cam_fusion.min()
                 cam_max = cam_fusion.max()
                 if cam_max - cam_min > 1e-8:
@@ -942,10 +950,15 @@ class DiagnosisEngine:
         return f"data:image/png;base64,{b64}"
 
 
+# ═════════════════════════════════════════════
+#  SINGLETON
+# ═════════════════════════════════════════════
+
 _engine: DiagnosisEngine | None = None
 
 
 def get_diagnosis_engine() -> DiagnosisEngine:
+    """Obtiene instancia singleton del motor de diagnóstico."""
     global _engine
     if _engine is None:
         _engine = DiagnosisEngine()

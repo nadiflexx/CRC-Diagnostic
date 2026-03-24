@@ -13,7 +13,7 @@ router = APIRouter(prefix="/diagnosis", tags=["Diagnosis"])
 
 
 @router.post("/run", response_model=DiagnosisResponse)
-def run_diagnosis(req: DiagnosisRequest, db: Session = None):
+def run_diagnosis(req: DiagnosisRequest, db: Session = Depends(get_db_dependency)):  # noqa: B008
     """Run a diagnosis for the given patient
 
     Params:
@@ -90,11 +90,13 @@ def run_diagnosis(req: DiagnosisRequest, db: Session = None):
 
     visit_repo.create(patient_id=req.patient_id, **visit_data)
     db.commit()
+
+    result["patient_id"] = req.patient_id
     return DiagnosisResponse(**result)
 
 
 @router.get("/history/{patient_id}")
-def get_history(patient_id: int, db: Session = None):
+def get_history(patient_id: int, db: Session = Depends(get_db_dependency)):  # noqa: B008
     """Get the diagnosis history for the given patient
     Params:
     - patient_id: int

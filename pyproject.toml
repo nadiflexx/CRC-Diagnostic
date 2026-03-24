@@ -41,6 +41,7 @@ dependencies = [
     "shap>=0.46.0",
     "numba>=0.59.0",
     "llvmlite>=0.42.0",
+    "grad-cam>=1.5.0",
     # ── Data ──
     "pandas<3",
     "numpy>=1.26.0",

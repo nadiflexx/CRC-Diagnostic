@@ -10,7 +10,7 @@ router = APIRouter(prefix="/patients", tags=["Patients"])
 
 
 @router.post("/", response_model=PatientOut)
-def create_patient(patient_in: PatientCreate, db: Session = None):
+def create_patient(patient_in: PatientCreate, db: Session = Depends(get_db_dependency)):  # noqa: B008
     """
     Create a new patient.
 
@@ -48,7 +48,7 @@ def create_patient(patient_in: PatientCreate, db: Session = None):
 
 
 @router.get("/", response_model=list[PatientOut])
-def get_patients(db: Session = None):
+def get_patients(db: Session = Depends(get_db_dependency)):  # noqa: B008
     """
     Get all patients.
 
@@ -64,7 +64,7 @@ def get_patients(db: Session = None):
 
 
 @router.get("/{patient_id}", response_model=PatientOut)
-def get_patient(patient_id: int, db: Session = None):
+def get_patient(patient_id: int, db: Session = Depends(get_db_dependency)):  # noqa: B008
     """
     Get a patient by ID.
 

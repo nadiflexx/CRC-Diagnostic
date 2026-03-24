@@ -191,6 +191,141 @@ div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
   color: #5a8d7f !important;
 }
 
+/* Reset completo de métricas */
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] *,
+[data-testid="stMetricLabel"],
+[data-testid="stMetricLabel"] *,
+[data-testid="stMetricDelta"],
+[data-testid="stMetricDelta"] * {
+  color: #1e3a2f !important;
+  -webkit-text-fill-color: #1e3a2f !important;
+  opacity: 1 !important;
+}
+
+/* Label específico (CEA, CA 19-9, etc.) */
+[data-testid="stMetricLabel"] {
+  color: #5a8d7f !important;
+  -webkit-text-fill-color: #5a8d7f !important;
+}
+
+[data-testid="stMetricLabel"] div,
+[data-testid="stMetricLabel"] p,
+[data-testid="stMetricLabel"] span {
+  color: #5a8d7f !important;
+  -webkit-text-fill-color: #5a8d7f !important;
+}
+
+/* Valor principal (2.5 ng/mL, etc.) - NEGRO */
+[data-testid="stMetricValue"] {
+  color: #1e3a2f !important;
+  -webkit-text-fill-color: #1e3a2f !important;
+}
+
+[data-testid="stMetricValue"] div,
+[data-testid="stMetricValue"] p,
+[data-testid="stMetricValue"] span {
+  color: #1e3a2f !important;
+  -webkit-text-fill-color: #1e3a2f !important;
+}
+
+/* Delta (Normal, Elevado, Baja) - gris/verde */
+[data-testid="stMetricDelta"] {
+  color: #5a8d7f !important;
+  -webkit-text-fill-color: #5a8d7f !important;
+}
+
+[data-testid="stMetricDelta"] div,
+[data-testid="stMetricDelta"] span,
+[data-testid="stMetricDelta"] p,
+[data-testid="stMetricDelta"] svg {
+  color: #5a8d7f !important;
+  -webkit-text-fill-color: #5a8d7f !important;
+  fill: #5a8d7f !important;
+}
+
+/* ================================================================
+   SECTION TITLE - asegurar que sea visible
+   ================================================================ */
+.section-title,
+.section-title * {
+  color: #1e3a2f !important;
+  -webkit-text-fill-color: #1e3a2f !important;
+}
+
+/* ================================================================
+   COLUMNS que contienen métricas
+   ================================================================ */
+[data-testid="column"] [data-testid="stMetricValue"],
+[data-testid="column"] [data-testid="stMetricValue"] *,
+[data-testid="column"] [data-testid="stMetricLabel"],
+[data-testid="column"] [data-testid="stMetricLabel"] *,
+[data-testid="column"] [data-testid="stMetricDelta"],
+[data-testid="column"] [data-testid="stMetricDelta"] * {
+  color: #1e3a2f !important;
+  -webkit-text-fill-color: #1e3a2f !important;
+}
+
+/* Label en columnas */
+[data-testid="column"] [data-testid="stMetricLabel"],
+[data-testid="column"] [data-testid="stMetricLabel"] * {
+  color: #5a8d7f !important;
+  -webkit-text-fill-color: #5a8d7f !important;
+}
+
+/* ================================================================
+   METRIC
+   ================================================================ */
+
+/* Valor principal de la métrica */
+div[data-testid="metric-container"] [data-testid="stMetricValue"],
+div[data-testid="metric-container"] [data-testid="stMetricValue"] > div,
+div[data-testid="metric-container"] [data-testid="stMetricValue"] div,
+div[data-testid="metric-container"] [data-testid="stMetricValue"] span,
+div[data-testid="metric-container"] [data-testid="stMetricValue"] p {
+  color: #1e3a2f !important;
+  -webkit-text-fill-color: #1e3a2f !important;
+}
+
+/* Label de la métrica (CEA, CA 19-9, Hemoglobina) */
+div[data-testid="metric-container"] [data-testid="stMetricLabel"],
+div[data-testid="metric-container"] [data-testid="stMetricLabel"] > div,
+div[data-testid="metric-container"] [data-testid="stMetricLabel"] p,
+div[data-testid="metric-container"] [data-testid="stMetricLabel"] span,
+div[data-testid="metric-container"] label,
+div[data-testid="metric-container"] label p,
+div[data-testid="metric-container"] label span {
+  color: #5a8d7f !important;
+  -webkit-text-fill-color: #5a8d7f !important;
+}
+
+/* Delta (Elevado, Normal, Baja) - SIEMPRE visible */
+div[data-testid="metric-container"] [data-testid="stMetricDelta"],
+div[data-testid="metric-container"] [data-testid="stMetricDelta"] > div,
+div[data-testid="metric-container"] [data-testid="stMetricDelta"] span,
+div[data-testid="metric-container"] [data-testid="stMetricDelta"] svg {
+  color: #5a8d7f !important;
+  -webkit-text-fill-color: #5a8d7f !important;
+  fill: #5a8d7f !important;
+}
+
+/* Delta con colores semánticos (opcional - si quieres rojo/verde) */
+div[data-testid="metric-container"]
+  [data-testid="stMetricDelta"][data-testid-delta="negative"],
+div[data-testid="metric-container"]
+  [data-testid="stMetricDelta"]:has(svg[data-testid="stMetricDeltaIcon-Down"]) {
+  color: #dc2626 !important;
+  -webkit-text-fill-color: #dc2626 !important;
+}
+
+div[data-testid="metric-container"]
+  [data-testid="stMetricDelta"][data-testid-delta="positive"],
+div[data-testid="metric-container"]
+  [data-testid="stMetricDelta"]:has(svg[data-testid="stMetricDeltaIcon-Up"]) {
+  color: #067a5f !important;
+  -webkit-text-fill-color: #067a5f !important;
+}
+
 /* --- BUTTONS (white text only here) --- */
 .stButton button {
   background: linear-gradient(135deg, #067a5f 0%, #0a5847 100%) !important;
