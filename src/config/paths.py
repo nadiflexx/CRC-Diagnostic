@@ -59,6 +59,10 @@ class PathSettings(BaseSettings):
 
     # ── Models ──
     @property
+    def MODELS_ROOT(self) -> Path:
+        return self.ROOT / "models"
+
+    @property
     def MODELS(self) -> Path:
         return self.ROOT / "models" / "saved"
 

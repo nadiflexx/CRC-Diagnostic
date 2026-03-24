@@ -60,7 +60,7 @@ class ModelSettings(BaseSettings):
     """ML/DL model hyperparameters."""
 
     # Image model
-    IMAGE_SIZE: int = 352
+    IMAGE_SIZE: int = 384
     IMAGE_BACKBONE: str = "efficientnet_b4"
     EPOCHS_IMAGE: int = 50
     EPOCHS_SEGMENTER: int = 50

@@ -6,13 +6,9 @@ Ensemble Adaptativo con Attention-Gating.
 Estrategia:
   - Pesos DINÁMICOS por imagen basados en Grad-CAM de Model A
   - Si Model A mira tejido (ratio alto) → confiar más en A
-  - Si Model A mira bordes/esquinas (ratio bajo) → confiar más en B
+  - Si Model A mira bordes NEGROS (ratio bajo) → confiar más en B
+  - Si Model A mira bordes con TEJIDO → confiar en A (NO penalizar)
   - Transición suave con sigmoid
-
-Refs:
-  - Mehrtash et al. 2020: Preprocessing diversity ensembles
-  - Lakshminarayanan et al. 2017: Uncertainty estimation
-  - Selvaraju et al. 2017: Grad-CAM for attention analysis
 """
 
 import json
@@ -32,25 +28,18 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from config.logger import log as logger
-from config.paths import paths
-from data.processing.image_preprocessor import (
+from src.config.logger import log as logger
+from src.config.paths import paths
+from src.data.processing.image_preprocessor import (
     ColonoscopyDataset,
     get_val_transforms,
 )
-from data.processing.standardizer import (
-    MultiSourceStandardizer,
-)
-from data.processing.tissue_only_preprocessor import (
-    TissueOnlyPreprocessor,
-)
-from evaluation.gradcam import (
-    GradCAM,
-    find_target_layer,
-)
-from models.image_classifier import ColonCancerClassifier, FocalLoss
-from models.tissue_classifier import TissueOnlyClassifier
-from training.train_tissue_classifier import (
+from src.data.processing.standardizer import MultiSourceStandardizer
+from src.data.processing.tissue_only_preprocessor import TissueOnlyPreprocessor
+from src.evaluation.gradcam import generate_gradcam
+from src.models.image_classifier import ColonCancerClassifier, FocalLoss
+from src.models.tissue_classifier import TissueOnlyClassifier
+from src.training.train_tissue_classifier import (
     TissueCropDataset,
     get_tissue_val_transforms,
     validate_multicrop,
@@ -65,7 +54,8 @@ class EnsemblePredictor:
 
     Los pesos se ajustan POR IMAGEN según dónde mira Model A:
     - Mira tejido → confiar en A (tiene contexto útil)
-    - Mira bordes → confiar en B (A está usando shortcuts)
+    - Mira bordes negros → confiar en B (A está usando shortcuts)
+    - Mira bordes con tejido → confiar en A (no es shortcut)
     """
 
     def __init__(self, device: str | None = None):
@@ -82,10 +72,10 @@ class EnsemblePredictor:
         self.beta_base = 0.5
 
         # Parámetros del sigmoid adaptativo
-        self.sigmoid_center = 1.3
-        self.sigmoid_slope = 5.0
-        self.alpha_min = 0.25
-        self.alpha_max = 0.75
+        self.sigmoid_center = 1.5
+        self.sigmoid_slope = 3.0
+        self.alpha_min = 0.20
+        self.alpha_max = 0.80
 
         self.use_adaptive = True
         self.num_classes = 3
@@ -98,9 +88,6 @@ class EnsemblePredictor:
 
         self.transform = get_val_transforms(384)
 
-        # Cache para Grad-CAM target layer
-        self._target_layer_a = None
-
         self._loaded = False
 
     # ═════════════════════════════════════════════
@@ -108,11 +95,7 @@ class EnsemblePredictor:
     # ═════════════════════════════════════════════
 
     def load_models(self) -> bool:
-        """
-        Load the ensemble models.
-
-        :return: True if all models are loaded successfully, False otherwise.
-        """
+        """Carga modelos A y B + config ensemble."""
         success_a = self._load_model_a()
         success_b = self._load_model_b()
         self._load_ensemble_config()
@@ -135,8 +118,13 @@ class EnsemblePredictor:
 
         return self._loaded
 
+    @property
+    def ensemble_available(self) -> bool:
+        """True si ambos modelos están cargados."""
+        return self.model_a is not None and self.model_b is not None
+
     def _load_model_a(self) -> bool:
-        """Load Model A."""
+        """Carga Model A (clasificador principal)."""
         path = paths.CLASSIFIER_CHECKPOINT
         if not path.exists():
             return False
@@ -166,7 +154,7 @@ class EnsemblePredictor:
         return True
 
     def _load_model_b(self) -> bool:
-        """Load Model B."""
+        """Carga Model B (tissue-only)."""
         path = paths.TISSUE_CLASSIFIER_CHECKPOINT
         if not path.exists():
             return False
@@ -191,7 +179,7 @@ class EnsemblePredictor:
         return True
 
     def _load_ensemble_config(self):
-        """Load ensemble config."""
+        """Carga configuración del ensemble."""
         config_path = paths.ENSEMBLE_CONFIG_PATH
         if not config_path.exists():
             return
@@ -216,68 +204,188 @@ class EnsemblePredictor:
             logger.warning(f"  ⚠️ Error config: {e}")
 
     # ═════════════════════════════════════════════
-    #  ATTENTION RATIO (Grad-CAM rápido)
+    #  ATTENTION RATIO (content-aware)
     # ═════════════════════════════════════════════
 
-    def compute_attention_ratio(self, tensor_a: torch.Tensor) -> float:
+    def compute_attention_ratio(
+        self,
+        tensor_a: torch.Tensor,
+        preprocessed_bgr: np.ndarray | None = None,
+    ) -> float:
         """
-        Analiza si el foco PRINCIPAL de Model A está en bordes.
+        Analiza A QUÉ mira Model A (no DÓNDE).
 
-        Método: Pointing Game + distribución top-10%.
+        Criterio único: ¿Mira TEJIDO o ARTEFACTOS OSCUROS?
 
-        Score alto → tejido → confiar en A
-        Score bajo → bordes → confiar en B
+        Returns:
+            > 2.0: Mira tejido iluminado → confiar en A
+            ~ 1.0: Zona gris/ambigua → neutro
+            < 0.5: Mira artefactos negros → confiar en B
         """
         try:
-            if self._target_layer_a is None:
-                self._target_layer_a = find_target_layer(self.model_a)
+            cam, _ = generate_gradcam(
+                model=self.model_a,
+                input_tensor=tensor_a,
+                target_class=None,
+                method="gradcam",
+            )
 
-            grad_cam = GradCAM(self.model_a, self._target_layer_a)
+            if preprocessed_bgr is None:
+                logger.info("  📊 Sin imagen BGR → ratio neutro 1.5")
+                return 1.5
 
-            try:
-                cam, _, _ = grad_cam.generate(tensor_a)
+            # ═══════════════════════════════════════════════════════════
+            # PASO 1: Identificar zonas de ALTA atención
+            # ═══════════════════════════════════════════════════════════
 
-                h, w = cam.shape
-                margin_h = max(1, int(h * 0.25))
-                margin_w = max(1, int(w * 0.25))
+            h_cam, w_cam = cam.shape
+            threshold = np.percentile(cam, 90)
+            hot_mask = cam >= threshold
 
-                center_mask = np.zeros((h, w), dtype=bool)
-                center_mask[
-                    margin_h : h - margin_h,
-                    margin_w : w - margin_w,
-                ] = True
+            if hot_mask.sum() == 0:
+                logger.info("  📊 Sin atención detectada → ratio neutro 1.5")
+                return 1.5
 
-                # Pointing: ¿máximo en centro?
-                max_pos = np.unravel_index(cam.argmax(), cam.shape)
-                max_in_center = center_mask[max_pos[0], max_pos[1]]
+            # ═══════════════════════════════════════════════════════════
+            # PASO 2: Analizar el CONTENIDO de las zonas calientes
+            # ═══════════════════════════════════════════════════════════
 
-                # Top 10% de activación
-                threshold = np.percentile(cam, 90)
-                hot_pixels = cam >= threshold
-                hot_total = hot_pixels.sum()
+            gray = cv2.cvtColor(preprocessed_bgr, cv2.COLOR_BGR2GRAY)
+            h_img, w_img = gray.shape
 
-                if hot_total == 0:
-                    return 1.5
+            cam_resized = cv2.resize(
+                cam, (w_img, h_img), interpolation=cv2.INTER_LINEAR
+            )
+            hot_mask_resized = cam_resized >= np.percentile(cam_resized, 90)
 
-                hot_in_center = (hot_pixels & center_mask).sum()
-                hot_in_border = (hot_pixels & ~center_mask).sum()
+            attention_pixels = gray[hot_mask_resized]
 
-                hot_ratio = float(hot_in_center) / max(float(hot_in_border), 1.0)
+            if len(attention_pixels) == 0:
+                return 1.5
 
-                if not max_in_center:
-                    hot_ratio *= 0.5
+            # ═══════════════════════════════════════════════════════════
+            # PASO 3: Clasificar el contenido por BRILLO
+            # ═══════════════════════════════════════════════════════════
 
-                border_hot_pct = hot_in_border / hot_total
-                if border_hot_pct > 0.6:
-                    hot_ratio *= 0.5
+            # Estadísticas de brillo
+            mean_brightness = float(np.mean(attention_pixels))
+            median_brightness = float(np.median(attention_pixels))
+            p25_brightness = float(np.percentile(attention_pixels, 25))
+            p75_brightness = float(np.percentile(attention_pixels, 75))
 
-                return float(hot_ratio)
+            # Distribución global de la imagen
+            img_p25 = np.percentile(gray, 25)
+            img_p50 = np.percentile(gray, 50)
+            img_p75 = np.percentile(gray, 75)
 
-            finally:
-                grad_cam.remove_hooks()
+            logger.info(
+                f"  📊 Imagen: p25={img_p25:.0f}, p50={img_p50:.0f}, p75={img_p75:.0f}"
+            )
+            logger.info(
+                f"  📊 Atención: mean={mean_brightness:.0f}, "
+                f"median={median_brightness:.0f}, "
+                f"p25={p25_brightness:.0f}, p75={p75_brightness:.0f}"
+            )
 
-        except Exception:
-            return 1.5
+            # ═══════════════════════════════════════════════════════════
+            # PASO 4: Calcular ratio basado en CALIDAD del contenido
+            # ═══════════════════════════════════════════════════════════
+
+            # Caso 1: Mira MAYORMENTE tejido brillante
+            if median_brightness > img_p75:
+                # Mira el cuartil superior → tejido bien iluminado
+                ratio = 3.0
+                logger.info(
+                    f"  📊 ✅ TEJIDO BRILLANTE: median={median_brightness:.0f} "
+                    f"> p75={img_p75:.0f} → ratio={ratio:.2f}"
+                )
+
+            # Caso 2: Mira tejido promedio
+            elif median_brightness > img_p50:
+                # Mira por encima de la mediana → tejido normal
+                ratio = 2.0
+                logger.info(
+                    f"  📊 ✅ TEJIDO NORMAL: median={median_brightness:.0f} "
+                    f"> p50={img_p50:.0f} → ratio={ratio:.2f}"
+                )
+
+            # Caso 3: Mira zona intermedia (puede ser tejido oscuro o artefacto)
+            elif median_brightness > img_p25:
+                # Entre p25 y p50 → zona gris
+                dark_pixels = np.sum(attention_pixels < img_p25)
+                dark_ratio = dark_pixels / len(attention_pixels)
+
+                if dark_ratio > 0.5:
+                    # Más del 50% mira zonas oscuras → sospechoso
+                    ratio = 0.7
+                    logger.info(
+                        f"  📊 ⚠️  ZONA GRIS con {dark_ratio:.0%} oscura "
+                        f"→ ratio={ratio:.2f}"
+                    )
+                else:
+                    # Distribución mixta → neutro
+                    ratio = 1.2
+                    logger.info(f"  📊 ⚠️  ZONA GRIS mixta → ratio={ratio:.2f}")
+
+            # Caso 4: Mira MAYORMENTE zonas oscuras (artefactos)
+            else:
+                # Mediana por debajo de p25 → definitivamente artefactos
+                ratio = 0.3
+                logger.info(
+                    f"  📊 🚨 ARTEFACTO OSCURO: median={median_brightness:.0f} "
+                    f"< p25={img_p25:.0f} → ratio={ratio:.2f}"
+                )
+
+            # ═══════════════════════════════════════════════════════════
+            # PASO 5: Penalización adicional por outliers extremos
+            # ═══════════════════════════════════════════════════════════
+
+            # Si tiene píxeles MUY oscuros (posibles marcos negros)
+            very_dark_pixels = np.sum(attention_pixels < 20)
+            very_dark_ratio = very_dark_pixels / len(attention_pixels)
+
+            if very_dark_ratio > 0.3:
+                # Más del 30% de la atención está en píxeles < 20 → artefacto
+                penalty = 0.5
+                ratio *= penalty
+                logger.info(
+                    f"  📊 🚨 {very_dark_ratio:.0%} atención en NEGRO PURO "
+                    f"(<20) → penalización ×{penalty} → ratio={ratio:.2f}"
+                )
+
+            # ═══════════════════════════════════════════════════════════
+            # PASO 6: Verificación de coherencia espacial
+            # ═══════════════════════════════════════════════════════════
+
+            # Punto de máxima atención
+            max_pos = np.unravel_index(cam.argmax(), cam.shape)
+            max_y = int(max_pos[0] / h_cam * h_img)
+            max_x = int(max_pos[1] / w_cam * w_img)
+
+            # Brillo en el punto máximo (ventana 11x11)
+            y1, y2 = max(0, max_y - 5), min(h_img, max_y + 6)
+            x1, x2 = max(0, max_x - 5), min(w_img, max_x + 6)
+            max_point_brightness = float(gray[y1:y2, x1:x2].mean())
+
+            logger.info(
+                f"  📊 Punto máximo: br={max_point_brightness:.0f} "
+                f"en ({max_x}, {max_y})"
+            )
+
+            # Si el punto máximo es muy oscuro, penalizar incluso si el promedio es OK
+            if max_point_brightness < 30 and ratio > 1.0:
+                penalty = 0.6
+                ratio *= penalty
+                logger.info(
+                    f"  📊 🚨 Máximo en NEGRO ({max_point_brightness:.0f}<30) "
+                    f"→ penalización ×{penalty} → ratio={ratio:.2f}"
+                )
+
+            return float(ratio)
+
+        except Exception as e:
+            logger.warning(f"  ⚠️ Attention ratio falló: {e}")
+        return 1.5
 
     # ═════════════════════════════════════════════
     #  COMBINACIÓN ADAPTATIVA
@@ -288,9 +396,9 @@ class EnsemblePredictor:
         Calcula pesos dinámicos basados en attention ratio.
 
         Sigmoid suave:
-          ratio=2.0 → α=0.74, β=0.26 (confiar en A)
-          ratio=1.3 → α=0.50, β=0.50 (neutro)
-          ratio=0.8 → α=0.27, β=0.73 (confiar en B)
+          ratio=3.0 → α=0.75, β=0.25  (confiar en A, mira tejido)
+          ratio=1.3 → α=0.50, β=0.50  (neutro)
+          ratio=0.3 → α=0.26, β=0.74  (confiar en B, A mira artefactos)
         """
         sigmoid_val = 1.0 / (
             1.0 + np.exp(-self.sigmoid_slope * (attention_ratio - self.sigmoid_center))
@@ -308,12 +416,7 @@ class EnsemblePredictor:
         attention_ratio: float | None = None,
     ) -> tuple[np.ndarray, float, float]:
         """
-        Combina predicciones de ambos modelos.
-
-        Si use_adaptive=True y attention_ratio disponible:
-          → pesos dinámicos por imagen
-        Si no:
-          → pesos fijos (alpha_base, beta_base)
+        Combina predicciones con pesos adaptativos.
 
         Returns:
             (probs_combined, alpha_used, beta_used)
@@ -335,40 +438,47 @@ class EnsemblePredictor:
         """
         Predicción con ensemble adaptativo.
 
-        1. Model A predice + Grad-CAM → attention ratio
-        2. Model B predice (tissue-only multi-crop)
-        3. Pesos dinámicos según attention ratio
-        4. Combinar
+        1. Model A predice + preprocesa imagen
+        2. Grad-CAM → attention ratio (content-aware)
+        3. Model B predice (tissue-only multi-crop)
+        4. Pesos dinámicos según attention ratio
+        5. Combinar
         """
         if not self._loaded:
-            raise RuntimeError("Modelos no cargados")
+            raise RuntimeError("Modelos no cargados. Llama load_models() primero.")
 
         if isinstance(image, (str, Path)):
             image = cv2.imread(str(image))
             if image is None:
-                raise ValueError("No se pudo cargar imagen")
+                raise ValueError("No se pudo cargar la imagen")
 
-        # Model A
-        probs_a, tensor_a = self._predict_model_a_with_tensor(image)
+        # ── Model A (devuelve también imagen preprocesada) ──
+        probs_a, tensor_a, preprocessed_a = self._predict_model_a_with_tensor(image)
 
-        # Attention ratio
+        # ── Attention ratio (content-aware) ──
         attention_ratio = None
         if self.use_adaptive and self.model_b is not None:
-            attention_ratio = self.compute_attention_ratio(tensor_a)
+            attention_ratio = self.compute_attention_ratio(tensor_a, preprocessed_a)
 
-        # Model B
+        # ── Model B ──
         if self.model_b is not None and self.beta_base > 0:
             probs_b = self._predict_model_b(image)
         else:
             probs_b = probs_a
 
-        # Combinar
+        # ── Combinar ──
         probs, alpha_used, beta_used = self.combine_predictions(
             probs_a, probs_b, attention_ratio
         )
 
         pred_class = int(np.argmax(probs))
         confidence = float(probs[pred_class])
+
+        logger.info(
+            f"  Ensemble: attention={attention_ratio}, "
+            f"α={alpha_used:.2f}, β={beta_used:.2f} "
+            f"→ {self.class_names.get(pred_class, '?')} ({confidence:.1%})"
+        )
 
         return {
             "class_idx": pred_class,
@@ -377,7 +487,9 @@ class EnsemblePredictor:
             "probabilities": probs.tolist(),
             "model_a_probs": probs_a.tolist(),
             "model_b_probs": probs_b.tolist(),
-            "attention_ratio": attention_ratio,
+            "attention_ratio": (
+                round(attention_ratio, 3) if attention_ratio is not None else None
+            ),
             "alpha_used": alpha_used,
             "beta_used": beta_used,
             "mode": "adaptive" if self.use_adaptive else "fixed",
@@ -385,8 +497,13 @@ class EnsemblePredictor:
 
     def _predict_model_a_with_tensor(
         self, img_bgr: np.ndarray
-    ) -> tuple[np.ndarray, torch.Tensor]:
-        """Predice con Model A y retorna también el tensor (para Grad-CAM)."""
+    ) -> tuple[np.ndarray, torch.Tensor, np.ndarray]:
+        """
+        Predice con Model A.
+
+        Returns:
+            (probabilidades, tensor, imagen_preprocesada_bgr)
+        """
         processed = self.preprocessor_a.process_image(img_bgr)
         img_rgb = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
 
@@ -398,7 +515,7 @@ class EnsemblePredictor:
             logits = self.model_a(tensor) / self.temp_a
             probs = F.softmax(logits, dim=1).cpu().numpy()[0]
 
-        return probs, tensor
+        return probs, tensor, processed
 
     def _predict_model_b(self, img_bgr: np.ndarray) -> np.ndarray:
         """Predicción con Model B (tissue-only multi-crop)."""
@@ -432,7 +549,6 @@ class EnsemblePredictor:
     ) -> dict:
         """Predicción batch con pesos fijos (para evaluación rápida)."""
 
-        # Model A
         logger.info("  Model A predicciones...")
         test_ds_a = ColonoscopyDataset(
             test_paths,
@@ -460,7 +576,6 @@ class EnsemblePredictor:
 
         probs_a_all = np.vstack(probs_a_list)
 
-        # Model B
         probs_b_all = probs_a_all
         if self.model_b is not None:
             logger.info("  Model B predicciones (multi-crop)...")
@@ -485,7 +600,6 @@ class EnsemblePredictor:
             )
             probs_b_all = m_b["probabilities"]
 
-        # Combinar con pesos fijos (batch)
         logger.info("  Combinando ensemble...")
         n = min(len(probs_a_all), len(probs_b_all))
         probs_a_all = probs_a_all[:n]
@@ -497,10 +611,7 @@ class EnsemblePredictor:
 
         try:
             auc = roc_auc_score(
-                labels,
-                ensemble_probs,
-                multi_class="ovr",
-                average="macro",
+                labels, ensemble_probs, multi_class="ovr", average="macro"
             )
         except Exception:
             auc = 0.0
@@ -536,7 +647,6 @@ class EnsemblePredictor:
 
         logger.info("\n═══ OPTIMIZANDO PESOS BASE ═══")
 
-        # Model A probs
         val_ds_a = ColonoscopyDataset(
             val_paths,
             val_labels,
@@ -562,7 +672,6 @@ class EnsemblePredictor:
                 probs_a.append(p)
         probs_a = np.vstack(probs_a)
 
-        # Model B probs
         crop_ds = TissueCropDataset(
             val_paths,
             val_labels,
@@ -573,11 +682,7 @@ class EnsemblePredictor:
         )
         criterion = FocalLoss(num_classes=self.num_classes, label_smoothing=0.0)
         m_b = validate_multicrop(
-            self.model_b,
-            crop_ds,
-            criterion,
-            self.device,
-            self.temp_b,
+            self.model_b, crop_ds, criterion, self.device, self.temp_b
         )
         probs_b = m_b["probabilities"]
 
@@ -586,7 +691,6 @@ class EnsemblePredictor:
         probs_b = probs_b[:n]
         labels = np.array(val_labels[:n])
 
-        # Grid search
         best_score = -1.0
         best_alpha = 0.5
         results = []
@@ -604,11 +708,7 @@ class EnsemblePredictor:
                 score = accuracy_score(labels, preds)
 
             results.append(
-                {
-                    "alpha": round(alpha_c, 2),
-                    "beta": round(beta_c, 2),
-                    "score": score,
-                }
+                {"alpha": round(alpha_c, 2), "beta": round(beta_c, 2), "score": score}
             )
 
             if score > best_score:
@@ -633,6 +733,7 @@ class EnsemblePredictor:
         return self.alpha_base, self.beta_base
 
     def _save_ensemble_config(self):
+        """Guarda configuración del ensemble."""
         config = {
             "alpha": round(self.alpha_base, 4),
             "beta": round(self.beta_base, 4),
