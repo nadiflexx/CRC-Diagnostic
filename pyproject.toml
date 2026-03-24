@@ -63,6 +63,7 @@ dependencies = [
     "tqdm>=4.66.2",
     "loguru>=0.7.0",
     "mlflow>=3.10.1",
+    "gdown>=5.2.1",
 ]
 
 [project.optional-dependencies]
