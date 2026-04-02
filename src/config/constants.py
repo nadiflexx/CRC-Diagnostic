@@ -104,7 +104,7 @@ IMAGE_GLOB_PATTERNS = [f"*{ext}" for ext in IMAGE_EXTENSIONS]
 UPLOAD_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
 
 # ═══════════════════════════════════════════════════════════
-#  TABULAR FEATURES
+#  TABULAR FEATURES  (clinical lab — SyntheticPatientGenerator)
 # ═══════════════════════════════════════════════════════════
 
 NUMERIC_FEATURES = [
@@ -183,6 +183,119 @@ PHYSIOLOGICAL_RANGES = {
     "pack_years_smoked": (0, 80),
     "previous_polyps_count": (0, 20),
 }
+
+# ═══════════════════════════════════════════════════════════
+#  TABULAR CSV FEATURES  (colorectal_cancer_dataset.csv pipeline)
+# ═══════════════════════════════════════════════════════════
+
+# Categorical → numeric mappings for the Kaggle CSV-based pipeline
+CSV_BINARY_MAP: dict[str, int] = {"Yes": 1, "No": 0}
+CSV_GENDER_MAP: dict[str, int] = {"M": 1, "F": 0}
+
+CSV_OBESITY_MAP: dict[str, int] = {
+    "Normal": 0,
+    "Overweight": 1,
+    "Obese": 2,
+}
+CSV_DIET_MAP: dict[str, int] = {
+    "Low": 0,
+    "Moderate": 1,
+    "High": 2,
+}
+CSV_ACTIVITY_MAP: dict[str, int] = {
+    "Low": 0,
+    "Moderate": 1,
+    "High": 2,
+}
+CSV_SCREENING_MAP: dict[str, int] = {
+    "Never": 0,
+    "Irregular": 1,
+    "Regular": 2,
+}
+CSV_URBAN_MAP: dict[str, int] = {
+    "Rural": 0,
+    "Urban": 1,
+}
+CSV_AGE_RISK_GROUP_MAP: dict[str, int] = {
+    "Low": 0,
+    "Medium": 1,
+    "High": 2,
+    "Very_High": 3,
+}
+
+# Ordered options for one-hot encoding reproducibility
+CSV_LIFESTYLE_CLUSTER_OPTIONS: list[str] = [
+    "Dietary",
+    "Healthy",
+    "High_Risk",
+    "Sedentary",
+]
+
+# Columns to drop from the raw Kaggle CSV before feature engineering
+CSV_COLUMNS_TO_DROP: list[str] = [
+    "Patient_ID",
+    "Country",
+    "Cancer_Stage",
+    "Tumor_Size_mm",
+    "Treatment_Type",
+    "Survival_5_years",
+    "Mortality",
+    "Healthcare_Costs",
+    "Survival_Prediction",
+    "Economic_Classification",
+    "Healthcare_Access",
+    "Insurance_Status",
+]
+
+# Canonical column order for the processed CSV dataset
+CSV_FINAL_COLUMNS: list[str] = [
+    "Age",
+    "Gender",
+    "Family_History",
+    "Smoking_History",
+    "Alcohol_Consumption",
+    "Obesity_BMI",
+    "Diet_Risk",
+    "Physical_Activity",
+    "Diabetes",
+    "Inflammatory_Bowel_Disease",
+    "Genetic_Mutation",
+    "Screening_History",
+    "Early_Detection",
+    "Incidence_Rate_per_100K",
+    "Mortality_Rate_per_100K",
+    "Urban_or_Rural",
+    "Risk_Score",
+    "Prevention_Index",
+    "Access_Score",
+    "Age_Risk_Group",
+    "Diagnosis",
+    "LC_Dietary",
+    "LC_Healthy",
+    "LC_High_Risk",
+    "LC_Sedentary",
+]
+
+# MLP hyper-parameters for the CSV-based tabular model
+CSV_MLP_HIDDEN_LAYERS: tuple[int, ...] = (256, 128, 64)
+CSV_MLP_ACTIVATION: str = "relu"
+CSV_MLP_SOLVER: str = "adam"
+CSV_MLP_ALPHA: float = 1e-4
+CSV_MLP_LEARNING_RATE: str = "adaptive"
+CSV_MLP_LEARNING_RATE_INIT: float = 1e-3
+CSV_MLP_MAX_ITER: int = 200
+CSV_MLP_N_ITER_NO_CHANGE: int = 20
+
+# Split ratios shared across the CSV pipeline
+CSV_TRAIN_TEST_SIZE: float = 0.30
+CSV_TRAIN_VAL_SIZE: float = 0.10
+CSV_RANDOM_SEED: int = 42
+
+# Threshold search bounds for recall-optimized decision boundary
+CSV_THRESHOLD_MIN: float = 0.20
+CSV_THRESHOLD_MAX: float = 0.75
+CSV_THRESHOLD_STEP: float = 0.01
+CSV_MIN_RECALL_TARGET: float = 0.90
 
 # ═══════════════════════════════════════════════════════════
 #  GDC API MAPPINGS
