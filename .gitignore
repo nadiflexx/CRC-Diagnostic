@@ -52,6 +52,7 @@ data/predictions/*
 data/colon_clean/*
 data/colon_processed/*
 data/colon_processed_tissue_only/*
+data/analysis/*
 
 # Keep the folder structure, just ignore content
 !data/raw/.gitkeep

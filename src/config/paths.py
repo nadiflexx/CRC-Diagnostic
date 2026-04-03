@@ -37,6 +37,14 @@ class PathSettings(BaseSettings):
         return self.DATA / "processed"
 
     @property
+    def PROCESSED_TABULAR(self) -> Path:
+        return self.PROCESSED / "tabular"
+
+    @property
+    def ANALYSIS(self) -> Path:
+        return self.DATA / "analysis"
+
+    @property
     def SYNTHETIC(self) -> Path:
         return self.DATA / "synthetic"
 
@@ -109,6 +117,23 @@ class PathSettings(BaseSettings):
     def ENSEMBLE_CONFIG_PATH(self) -> Path:
         return self.MODELS / "ensemble_config.json"
 
+    # ── Generic Tabular Model paths ──
+    @property
+    def GENERIC_TABULAR_MODEL_DIR(self) -> Path:
+        return self.MODELS / "generic_tabular"
+
+    @property
+    def GENERIC_TABULAR_MODEL_PATH(self) -> Path:
+        return self.GENERIC_TABULAR_MODEL_DIR / "mlp_model.pkl"
+
+    @property
+    def GENERIC_TABULAR_SCALER_PATH(self) -> Path:
+        return self.GENERIC_TABULAR_MODEL_DIR / "scaler.pkl"
+
+    @property
+    def GENERIC_TABULAR_CONFIG_PATH(self) -> Path:
+        return self.GENERIC_TABULAR_MODEL_DIR / "model_config.pkl"
+
     @property
     def NOTEBOOKS(self) -> Path:
         return self.ROOT / "notebooks"
@@ -121,7 +146,10 @@ class PathSettings(BaseSettings):
             self.RAW,
             self.RAW / "limuc",
             self.HYPERKVASIR_RAW,
+            self.PROCESSED_TABULAR,
+            self.ANALYSIS,
             self.MODELS,
+            self.GENERIC_TABULAR_MODEL_DIR,
             self.LOGS,
             self.NOTEBOOKS,
         ]

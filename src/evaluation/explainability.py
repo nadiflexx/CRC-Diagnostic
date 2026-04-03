@@ -293,3 +293,333 @@ class TabularExplainer:
             plt.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return fig
+
+
+class GenericTabularExplainer:
+    """
+    Explainer for GenericTabularMLPClassifier model using permutation importance.
+    Provides explanations for individual predictions and visualization of risk factors.
+    """
+
+    def __init__(self, model, feature_names, X_background=None):
+        """
+        Initialize the explainer.
+
+        :param model: GenericTabularMLPClassifier instance (fitted)
+        :param feature_names: List of feature names
+        :param X_background: Background data for SHAP (optional, for future use)
+        """
+        self.model = model
+        self.feature_names = np.array(feature_names)
+        self.X_background = X_background
+        self._shap_explainer = None
+        self._permutation_importances = None
+        self._fitted = False
+
+    def fit(self, X_train):
+        """
+        Fit the explainer with background data.
+
+        :param X_train: Training data for computing permutation importance
+        """
+        # Siempre computar permutation importance como fallback principal
+        self._compute_permutation_importance(X_train)
+        
+        try:
+            import shap
+
+            # Intentar usar KernelExplainer con muestras del background data
+            background_sample = shap.sample(
+                X_train, min(50, len(X_train)), random_state=42
+            )
+            self._shap_explainer = shap.KernelExplainer(
+                self.model.predict_proba, background_sample
+            )
+            self._fitted = True
+            logger.info("SHAP KernelExplainer initialized for GenericTabularMLPClassifier")
+        except ImportError:
+            logger.warning("SHAP not installed, using permutation importance only")
+            self._fitted = True
+        except Exception as e:
+            logger.warning(f"SHAP initialization failed: {e}, using permutation importance only")
+            self._fitted = True
+
+    def _compute_permutation_importance(self, X_train):
+        """
+        Compute permutation importance for the features.
+
+        :param X_train: Training data
+        """
+        from sklearn.inspection import permutation_importance
+
+        # Compute permutation importance
+        result = permutation_importance(
+            self.model,
+            X_train,
+            self.model.predict(X_train),  # Use model predictions
+            n_repeats=10,
+            random_state=42,
+            n_jobs=-1,
+        )
+        self._permutation_importances = result.importances_mean
+        self._fitted = True
+        logger.info("Permutation importance computed for GenericTabularMLPClassifier")
+
+    def explain(self, X, y_pred_proba=None):
+        """
+        Explain the prediction for the given input.
+
+        :param X: Input data (single sample or batch)
+        :param y_pred_proba: Pre-computed prediction probabilities (optional)
+        :return: Explanation dictionary
+        """
+        # Ensure X is 2D
+        if X.ndim == 1:
+            X = X.reshape(1, -1)
+
+        if y_pred_proba is None:
+            y_pred_proba = self.model.predict_proba(X)
+
+        # Priorizar permutation importance por robustez
+        if self._permutation_importances is not None:
+            return self._explain_permutation(X, y_pred_proba)
+        elif self._shap_explainer is not None and self._fitted:
+            return self._explain_shap(X, y_pred_proba)
+        else:
+            return self._explain_simple(X, y_pred_proba)
+
+    def _explain_shap(self, X, y_pred_proba):
+        """
+        Explain using SHAP values.
+
+        :param X: Input data
+        :param y_pred_proba: Prediction probabilities
+        :return: Explanation dictionary
+        """
+        try:
+            shap_values = self._shap_explainer.shap_values(X)
+            
+            # Handle different SHAP output formats
+            if isinstance(shap_values, list):
+                # Binary classification returns list of [neg_class, pos_class]
+                sv = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+            else:
+                sv = shap_values
+            
+            # Ensure sv is 1D array
+            if hasattr(sv, 'ndim'):
+                if sv.ndim > 1:
+                    sv = sv[0]
+            else:
+                # Convert to numpy array if it's not
+                sv = np.array(sv).flatten()
+            
+            # Ensure numeric values
+            sv = np.asarray(sv, dtype=float)
+            
+            paired = list(zip(self.feature_names, sv.tolist(), strict=True))
+            paired_sorted = sorted(paired, key=lambda p: abs(p[1]), reverse=True)
+
+            return {
+                "shap_values": sv,
+                "feature_names": self.feature_names.tolist(),
+                "top_risk_factors": [(n, float(v)) for n, v in paired_sorted if v > 0],
+                "protective_factors": [(n, float(v)) for n, v in paired_sorted if v < 0],
+                "prediction_proba": float(y_pred_proba[0, 1]),
+                "base_value": float(
+                    self._shap_explainer.expected_value[1]
+                    if isinstance(self._shap_explainer.expected_value, (list, np.ndarray))
+                    else self._shap_explainer.expected_value
+                ),
+                "method": "SHAP",
+            }
+        except Exception as e:
+            logger.warning(f"SHAP explanation failed: {e}, falling back to permutation importance")
+            return self._explain_permutation(X, y_pred_proba)
+
+    def _explain_permutation(self, X, y_pred_proba):
+        """
+        Explain using permutation importance.
+
+        :param X: Input data
+        :param y_pred_proba: Prediction probabilities
+        :return: Explanation dictionary
+        """
+        if self._permutation_importances is None:
+            return self._explain_simple(X, y_pred_proba)
+        
+        importances = self._permutation_importances
+        
+        # Ensure importances is numeric array
+        if not isinstance(importances, np.ndarray):
+            importances = np.array(importances, dtype=float)
+        
+        paired = sorted(
+            zip(self.feature_names, importances.tolist(), strict=True),
+            key=lambda p: abs(p[1]),
+            reverse=True,
+        )
+
+        return {
+            "shap_values": importances,
+            "feature_names": self.feature_names.tolist(),
+            "top_risk_factors": [(n, float(v)) for n, v in paired if v > 0][:10],
+            "protective_factors": [(n, float(v)) for n, v in paired if v < 0][:10],
+            "prediction_proba": float(y_pred_proba[0, 1]),
+            "base_value": 0.0,
+            "method": "Permutation Importance",
+        }
+
+    def _explain_simple(self, X, y_pred_proba):
+        """
+        Simple explanation based on feature values relative to background.
+
+        :param X: Input data
+        :param y_pred_proba: Prediction probabilities
+        :return: Explanation dictionary
+        """
+        # Use mean of background data or zeros as baseline
+        if self.X_background is not None:
+            baseline = np.mean(self.X_background, axis=0)
+        else:
+            baseline = np.zeros(len(self.feature_names))
+
+        # Simple contribution: difference from baseline
+        contribution = np.abs(X[0] - baseline)
+        paired = sorted(
+            zip(self.feature_names, contribution.tolist(), strict=True),
+            key=lambda p: abs(p[1]),
+            reverse=True,
+        )
+
+        return {
+            "shap_values": contribution,
+            "feature_names": self.feature_names.tolist(),
+            "top_risk_factors": paired[:10],
+            "protective_factors": [],
+            "prediction_proba": float(y_pred_proba[0, 1]),
+            "base_value": 0.0,
+            "method": "Feature Deviation",
+        }
+
+    def plot_explanation(
+        self, X, y_pred_proba=None, top_n=15, save_path=None, figsize=(10, 8)
+    ):
+        """
+        Plot explanation for a single sample.
+
+        :param X: Input data (single sample)
+        :param y_pred_proba: Pre-computed prediction probability (optional)
+        :param top_n: Number of top features to display
+        :param save_path: Path to save the plot
+        :param figsize: Figure size
+        :return: Figure object
+        """
+        if X.ndim == 1:
+            X = X.reshape(1, -1)
+
+        explanation = self.explain(X, y_pred_proba)
+        sv = explanation["shap_values"]
+        method = explanation["method"]
+        pred_prob = explanation["prediction_proba"]
+
+        fig, ax = plt.subplots(figsize=figsize)
+        sorted_idx = np.argsort(np.abs(sv))[-top_n:]
+        colors = ["#D32F2F" if v > 0 else "#388E3C" for v in sv[sorted_idx]]
+        names = [self.feature_names[i] for i in sorted_idx]
+
+        bars = ax.barh(range(len(sorted_idx)), sv[sorted_idx], color=colors)
+        ax.set_yticks(range(len(sorted_idx)))
+        ax.set_yticklabels(names, fontsize=10)
+        ax.set_xlabel("Contribution / Importance", fontsize=11)
+        ax.set_title(
+            f"Risk Factors — CRC Probability: {pred_prob:.1%} ({method})",
+            fontsize=12,
+            fontweight="bold",
+        )
+        ax.axvline(x=0, color="black", linewidth=0.8)
+
+        # Add value labels on bars
+        for i, (bar, val) in enumerate(zip(bars, sv[sorted_idx])):
+            x_pos = val + (max(sv[sorted_idx]) * 0.02 if val > 0 else -max(sv[sorted_idx]) * 0.02)
+            ax.text(
+                x_pos,
+                i,
+                f"{val:.3f}",
+                va="center",
+                ha="left" if val > 0 else "right",
+                fontsize=9,
+            )
+
+        plt.tight_layout()
+        if save_path:
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(str(save_path), dpi=150, bbox_inches="tight")
+            logger.info(f"Explanation plot saved to {save_path}")
+        plt.close(fig)
+        return fig
+
+    def plot_batch_comparison(self, X, y_true=None, save_path=None):
+        """
+        Plot comparison of predictions and feature importances for multiple samples.
+
+        :param X: Input data (multiple samples)
+        :param y_true: True labels (optional, for accuracy visualization)
+        :param save_path: Path to save the plot
+        :return: Figure object
+        """
+        if X.ndim == 1:
+            X = X.reshape(1, -1)
+
+        y_pred_proba = self.model.predict_proba(X)
+        y_pred = self.model.predict(X)
+
+        # Create subplots: probabilities + feature importance
+        fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+
+        # Top plot: Prediction probabilities
+        ax_prob = axes[0]
+        x_pos = np.arange(len(y_pred_proba))
+        colors_pred = ["#D32F2F" if pred == 1 else "#388E3C" for pred in y_pred]
+        bars = ax_prob.bar(x_pos, y_pred_proba[:, 1], color=colors_pred, alpha=0.7, edgecolor="black")
+
+        # Add true labels if provided
+        if y_true is not None:
+            for i, (true_label, bar) in enumerate(zip(y_true, bars)):
+                marker = "✓" if (true_label == y_pred[i]) else "✗"
+                ax_prob.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.02,
+                    marker,
+                    ha="center",
+                    fontsize=12,
+                    fontweight="bold",
+                    color="green" if (true_label == y_pred[i]) else "red",
+                )
+
+        ax_prob.set_xlabel("Sample", fontsize=11)
+        ax_prob.set_ylabel("CRC Probability", fontsize=11)
+        ax_prob.set_title("Predicted Probabilities", fontsize=12, fontweight="bold")
+        ax_prob.set_ylim([0, 1.1] if y_true is not None else [0, 1])
+        ax_prob.grid(axis="y", alpha=0.3)
+
+        # Bottom plot: Average feature importance
+        if self._permutation_importances is not None:
+            ax_imp = axes[1]
+            importances = self._permutation_importances
+            sorted_idx = np.argsort(np.abs(importances))[-15:]
+            colors_imp = ["#D32F2F" if v > 0 else "#388E3C" for v in importances[sorted_idx]]
+            ax_imp.barh(range(len(sorted_idx)), importances[sorted_idx], color=colors_imp)
+            ax_imp.set_yticks(range(len(sorted_idx)))
+            ax_imp.set_yticklabels([self.feature_names[i] for i in sorted_idx])
+            ax_imp.set_xlabel("Importance", fontsize=11)
+            ax_imp.set_title("Feature Importance (Permutation-based)", fontsize=12, fontweight="bold")
+            ax_imp.axvline(x=0, color="black", linewidth=0.8)
+
+        plt.tight_layout()
+        if save_path:
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(str(save_path), dpi=150, bbox_inches="tight")
+            logger.info(f"Batch comparison plot saved to {save_path}")
+        plt.close(fig)
+        return fig
