@@ -33,7 +33,7 @@ class GenericTabularMLPClassifier:
         learning_rate_init (float): Tasa de aprendizaje inicial
         max_iter (int): Número máximo de iteraciones
     """
-    
+    # Inicialización del modelo con parámetros configurables Ej:256, 128, 64, 32
     def __init__(self, seed=42, hidden_layers=(256, 128, 64), 
                  alpha=1e-4, learning_rate_init=1e-3, max_iter=200):
         """Inicializa el clasificador con parámetros configurables."""
@@ -118,13 +118,3 @@ def create_default_model(seed=42):
     """Crea un modelo con los parámetros por defecto."""
     return GenericTabularMLPClassifier(seed=seed)
 
-
-# ============================================================================
-# CÓDIGO ANTIGUO REMOVIDO
-#
-# Todo el código de entrenamiento, evaluación y gráficas ha sido movido a:
-#    src/training/train_generic_tabular.py
-#
-# Para entrenar el modelo, ejecuta:
-#    python src/training/train_generic_tabular.py
-# ============================================================================

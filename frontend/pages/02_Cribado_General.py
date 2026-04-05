@@ -14,13 +14,14 @@ from pathlib import Path
 from components.banners import show_empty_state, show_result_banner
 from components.cards import page_header, render_section_card
 from components.sidebar import render_sidebar
+from components.loading import show_model_loading
 from utils.helpers import apply_custom_css
 
 # Agregar src al path para importaciones
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.index_utils import calculate_risk_indices
 
-st.set_page_config(page_title="Cribado General · Endo-AID", page_icon="📋", layout="wide")
+st.set_page_config(page_title="Cribado General · Endo-AID", page_icon="🌿", layout="wide")
 apply_custom_css()
 render_sidebar()
 
@@ -38,6 +39,9 @@ def load_model_artifacts():
     model_path = model_dir / "mlp_model.pkl"
     scaler_path = model_dir / "scaler.pkl"
     config_path = model_dir / "model_config.pkl"
+    
+    # Show loading spinner
+    show_model_loading("Initializing Generic Tabular Model...")
     
     if not model_path.exists():
         st.error(f"❌ Modelo no encontrado en {model_path}")
@@ -72,8 +76,6 @@ def get_feature_descriptions():
         'Diabetes': ('Diagnóstico de diabetes', ['Yes', 'No']),
         'Inflammatory_Bowel_Disease': ('Enfermedad inflamatoria intestinal', ['Yes', 'No']),
         'Genetic_Mutation': ('Mutación genética conocida (Lynch, FAP, etc)', ['Yes', 'No']),
-        'Screening_History': ('Historial de cribado previo', ['Yes', 'No']),
-        'Early_Detection': ('Detección temprana en cribados previos', ['Yes', 'No']),
         'Urban_or_Rural': ('Localización de residencia', ['Urban', 'Rural']),
     }
 
@@ -118,7 +120,6 @@ def calculate_lifestyle_categories(data_dict):
     """Calcula las categorías de estilo de vida (one-hot encoded)."""
     lifestyle = {
         'LC_Dietary': 1 if data_dict.get('Diet_Risk') == 'Yes' else 0,
-        'LC_Healthy': 1 if data_dict.get('Physical_Activity') == 'Yes' else 0,
         'LC_High_Risk': 1 if data_dict.get('Smoking_History') == 'Yes' or data_dict.get('Alcohol_Consumption') == 'Yes' else 0,
         'LC_Sedentary': 1 if data_dict.get('Physical_Activity') == 'No' else 0,
     }
@@ -282,30 +283,14 @@ def render() -> None:
         
         # ── Medidas de Salud ──
         st.markdown("**📊 Medidas de Salud**")
-        col1, col2, col3 = st.columns(3)
+        col1 = st.columns(1)[0]
         
         with col1:
-            bmi = st.slider("BMI (Índice de masa corporal)", 15.0, 50.0, 25.0, 0.1, key="bmi")
-        
-        with col2:
             urban_rural = st.selectbox("Localización", ['Urban', 'Rural'], key="urban_rural")
         
-        with col3:
-            pass  # Espacio en blanco
-        
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # ── Historial de Cribado ──
-        st.markdown("**🔍 Historial de Cribado**")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            screening_history = st.checkbox("Historial de cribado previo", key="screening_history")
-        
-        with col2:
-            early_detection = st.checkbox("Detección temprana previa", key="early_detection")
-        
-        st.markdown("<br>", unsafe_allow_html=True)
+        # ⚠️ REMOVIDO: Sección de Historial de Cribado (data leakage)
         
         submitted = st.form_submit_button("🧠 Predecir Riesgo", type="primary", use_container_width=True)
     
@@ -318,14 +303,11 @@ def render() -> None:
             'Family_History': 'Yes' if family_history else 'No',
             'Smoking_History': 'Yes' if smoking else 'No',
             'Alcohol_Consumption': 'Yes' if alcohol else 'No',
-            'Obesity_BMI': bmi,
             'Diet_Risk': 'Yes' if diet_risk else 'No',
             'Physical_Activity': 'Yes' if physical_activity else 'No',
             'Diabetes': 'Yes' if diabetes else 'No',
             'Inflammatory_Bowel_Disease': 'Yes' if ibd else 'No',
             'Genetic_Mutation': 'Yes' if genetic_mutation else 'No',
-            'Screening_History': 'Yes' if screening_history else 'No',
-            'Early_Detection': 'Yes' if early_detection else 'No',
             'Urban_or_Rural': urban_rural,
         }
         
@@ -477,25 +459,19 @@ def render() -> None:
                 st.markdown("- ✗ Mutación genética")
             if diet_risk:
                 st.markdown("- ✗ Dieta de alto riesgo")
-            if bmi > 30:
-                st.markdown(f"- ✗ Obesidad (BMI={bmi:.1f})")
         
         with col_factors2:
             st.markdown("**Protective Factors (✅ Factores Protectores):**")
             st.markdown(f"- **Prevention Index:** {prevention_index:.1f}/100")
             if physical_activity:
                 st.markdown("- ✓ Actividad física regular")
-            if screening_history:
-                st.markdown("- ✓ Historial de cribado")
-            if early_detection:
-                st.markdown("- ✓ Detección temprana previa")
             st.markdown(f"- **Access Score:** {access_score:.1f}/100")
         
         st.markdown("<br>", unsafe_allow_html=True)
         
         # ── Recomendaciones ──
         st.markdown("<div class='section-title'>💊 Recomendaciones Clínicas</div>", unsafe_allow_html=True)
-        
+        z
         if y_pred == 1:
             st.warning(
                 "🏥 **EVALUACIÓN INMEDIATA RECOMENDADA**\n\n"

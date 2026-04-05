@@ -127,7 +127,7 @@ def create_and_train_model(X_train_s, X_val_s, y_train, y_val, feature_names, va
         verbose=False,
     )
     
-    print(f"\n[MODEL] Arquitectura: Input({len(feature_names)}) → 256 → 128 → 64 → Output(1)  [{len(feature_names)} features]")
+    print(f"\n[MODEL] Arquitectura: Input({len(feature_names)}) → 64 → 32 → Output(1)  [{len(feature_names)} features]")
     print("[MODEL] Entrenando... (puede tardar ~1-2 min)")
     
     t0 = time.time()
@@ -490,6 +490,8 @@ def plot_results(y_test, y_prob_test, y_pred_test, metrics, results_thresh,
     ax_fi.legend(handles=legend_elem, fontsize=9, loc='lower right')
     
     # ── Panel de resumen de métricas ──────────────────────────────────────────
+    cv_text = (f"  CV Recall     {cv_scores.mean():.4f}±{cv_scores.std():.4f}\n"
+               if len(cv_scores) > 0 else "  CV Recall     (skipped)\n")
     metrics_text = (
         f"  RECALL        {recall:.4f}  ★\n"
         f"  PRECISION     {precision:.4f}\n"
@@ -498,7 +500,7 @@ def plot_results(y_test, y_prob_test, y_pred_test, metrics, results_thresh,
         f"  NPV           {npv:.4f}\n"
         f"  ROC-AUC       {roc_auc:.4f}\n"
         f"  PR-AUC        {pr_auc:.4f}\n"
-        f"  CV Recall     {cv_scores.mean():.4f}±{cv_scores.std():.4f}\n"
+        f"{cv_text}"
         f"  Umbral        {best_thresh}\n"
         f"  TP / FN       {tp:,} / {fn:,}"
     )
@@ -559,9 +561,11 @@ def main():
     save_model_and_artifacts(model, scaler, config_data)
     
     # 11. Genera gráficas
+    # Si validación cruzada está comentada, usar array vacío
+    cv_scores_plot = np.array([]) if 'cv_scores' not in locals() else cv_scores
     plot_results(
         y_test, metrics['y_prob_test'], metrics['y_pred_test'], metrics,
-        results_thresh, feat_imp, feature_names, best_thresh, cv_scores
+        results_thresh, feat_imp, feature_names, best_thresh, cv_scores_plot
     )
     
     print("\n" + "=" * 60)

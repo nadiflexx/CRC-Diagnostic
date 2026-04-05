@@ -88,3 +88,14 @@ def show_splash_screen() -> bool:
     container.empty()
     st.session_state.app_loaded = True
     return True
+
+
+def show_model_loading(message: str = "Loading model artifacts...") -> None:
+    """
+    Displays a simple loading spinner for model initialization.
+    
+    Args:
+        message: Loading status message to display
+    """
+    with st.spinner(f"⏳ {message}"):
+        time.sleep(0.1)  # Placeholder for actual loading

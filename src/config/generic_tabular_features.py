@@ -14,8 +14,8 @@ from src.config.paths import paths
 INPUT_CSV_TABULAR: str = str(paths.RAW_TABULAR / "colorectal_cancer_dataset.csv")
 
 # Salida: datos procesados y sintéticos combinados
-OUTPUT_CSV_TABULAR: str = str(paths.PROCESSED_TABULAR / "colorectal_cancer_full_dataset.csv")
-INPUT_CSV_TABULAR_PROCESSED: str = str(paths.PROCESSED_TABULAR / "colorectal_cancer_full_dataset.csv")
+OUTPUT_CSV_TABULAR: str = str(paths.PROCESSED_TABULAR / "colorectal_cancer_full_dataset_v2.csv")
+INPUT_CSV_TABULAR_PROCESSED: str = str(paths.PROCESSED_TABULAR / "colorectal_cancer_full_dataset_v2.csv")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RUTAS DEL MODELO (del sistema centralizado)
@@ -33,7 +33,8 @@ CONFIG_PATH: str = str(paths.GENERIC_TABULAR_CONFIG_PATH)
 ANALYSIS_DIR: str = str(paths.ANALYSIS)
 
 
-# Columnas del dataset original que se eliminan devido a que no aportan al modelo de predicción
+# Columnas del dataset original que se eliminan debido a que no aportan al modelo de predicción
+# INCLUIDO DATA LEAKAGE: Prevention_Index, Early_Detection, LC_Healthy, Screening_History
 COLUMNS_TO_DROP_TABULAR = [
     'Patient_ID',
     'Country',
@@ -49,16 +50,21 @@ COLUMNS_TO_DROP_TABULAR = [
     'Insurance_Status',
     'Incidence_Rate_per_100K',
     'Mortality_Rate_per_100K',
+    'Prevention_Index',        # ⚠️ Data leakage
+    'Early_Detection',         # ⚠️ Data leakage
+    'LC_Healthy',              # ⚠️ Data leakage
+    'Screening_History',       # ⚠️ Data leakage
+    'Obesity_BMI',             # ⚠️ May cause multicollinearity
 ]
 
 
-# Columnas del dataset final
+# Columnas del dataset final (sin leakage, sin Obesity_BMI)
 FINAL_COLUMNS_TABULAR = [
     'Age', 'Gender', 'Family_History', 'Smoking_History', 'Alcohol_Consumption',
-    'Obesity_BMI', 'Diet_Risk', 'Physical_Activity', 'Diabetes',
-    'Inflammatory_Bowel_Disease', 'Genetic_Mutation', 'Screening_History',
-    'Early_Detection', 'Urban_or_Rural', 'Risk_Score', 'Prevention_Index', 'Access_Score',
+    'Diet_Risk', 'Physical_Activity', 'Diabetes',
+    'Inflammatory_Bowel_Disease', 'Genetic_Mutation',
+    'Urban_or_Rural', 'Risk_Score', 'Access_Score',
     'Age_Risk_Group', 'Diagnosis',
-    'LC_Dietary', 'LC_Healthy', 'LC_High_Risk', 'LC_Sedentary',
+    'LC_Dietary', 'LC_High_Risk', 'LC_Sedentary',
 ]
 

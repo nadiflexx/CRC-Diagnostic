@@ -80,6 +80,21 @@ def main() -> None:
     with c3:
         st.markdown(
             module_card(
+                "📋",
+                "General Screening",
+                "Generic risk assessment using clinical and demographic factors. "
+                "AI-powered CRC prediction.",
+            ),
+            unsafe_allow_html=True,
+        )
+        st.page_link("pages/02_Cribado_General.py", label="Run General Screening", icon="🧠")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    c4 = st.columns(1)[0]
+    with c4:
+        st.markdown(
+            module_card(
                 "🔬",
                 "Endoscopy AI",
                 "Deep learning classification, Grad-CAM explainability, "

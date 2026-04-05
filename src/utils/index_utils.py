@@ -8,12 +8,14 @@ def calculate_risk_indices(data_dict):
     """
     Calcula índices de riesgo para un paciente (raw, antes de normalizar).
     
+    NOTA: Screening_History y Early_Detection fueron removidos por data leakage.
+    
     Retorna:
     - risk_score: 0-150 (suma de factores de riesgo)
-    - prevention_index: 0-100 (suma de factores protectores)
+    - prevention_index: 0-100 (suma de factores protectores, simplificado)
     - access_score: 50-70 (basado en ubicación)
     """
-    # Risk_Score: basado en factores de riesgo
+    # Risk_Score: basado en factores de riesgo (sin Obesity_BMI)
     risk_score = 0.0
     if data_dict.get('Family_History') == 'Yes':
         risk_score += 20
@@ -29,17 +31,13 @@ def calculate_risk_indices(data_dict):
         risk_score += 30
     if data_dict.get('Diet_Risk') == 'Yes':
         risk_score += 10
-    if data_dict.get('Obesity_BMI', 25) > 30:
-        risk_score += 10
     
-    # Prevention_Index: basado en factores protectores
+    # Prevention_Index: basado en factores protectores (simplificado sin Screening_History/Early_Detection)
+    # NOTA: Sin Screening_History ni Early_Detection, solo se basa en Physical_Activity
+    # Escalamos a 0-100 para mantener consistencia con escala del dataset
     prevention_index = 0.0
     if data_dict.get('Physical_Activity') == 'Yes':
-        prevention_index += 20
-    if data_dict.get('Screening_History') == 'Yes':
-        prevention_index += 25
-    if data_dict.get('Early_Detection') == 'Yes':
-        prevention_index += 30
+        prevention_index += 100
     prevention_index = min(prevention_index, 100)
     
     # Access_Score: basado en acceso a recursos
