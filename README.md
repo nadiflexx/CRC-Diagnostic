@@ -1,10 +1,10 @@
-# 🧬 Proyecto CRC — Diagnóstico Clínico-Tumoral (XGBoost)
+#  Proyecto CRC — Diagnóstico Clínico-Tumoral (XGBoost)
 
 Esta rama contiene el desarrollo respecto a datos tumorales del sistema predictivo para **Cáncer Colorrectal (CCR)**. A diferencia del modelo basado en hábitos de vida, este módulo genera y analiza biomarcadores de sangre (CEA, Hemoglobina) y features radiómicas SOTA (ADC, Entropía, etc.) simulando el escenario de un hospital real.
 
 ---
 
-## 🎯 Objetivo del Módulo
+##  Objetivo del Módulo
 
 - **Generar datos sintéticos** biológicamente realistas, introduciendo variables correlacionadas (Matrices de Covarianza multivariantes) e inyectando un 12% de _"Ruido Biológico"_ (Falsos Negativos y Falsos Positivos clínicos) para evitar la fuga de información (**Data Leakage**) y los datasets perfectos (100% Accuracy).
 
@@ -14,7 +14,7 @@ Esta rama contiene el desarrollo respecto a datos tumorales del sistema predicti
 
 ---
 
-## 🚀 Guía de Ejecución Paso a Paso
+##  Guía de Ejecución Paso a Paso
 
 Para replicar el experimento completo, validar las matemáticas y generar los modelos, ejecuta los siguientes comandos en orden utilizando `uv` (o tu entorno virtual de Python):
 
@@ -89,7 +89,7 @@ uv run model/inspect_inference_package.py
 
 ---
 
-## 📁 Estructura Principal Resultante
+##  Estructura Principal Resultante
 
 ```
 CRC-Diagnostic/
@@ -136,6 +136,22 @@ Durante el diseño del modelo tumoral, establecimos un modelo base (*Baseline*) 
 3. **Erradicación de Falsos Negativos (Sensibilidad):** En oncología, decirle a un paciente enfermo que está sano (Falso Negativo) es el peor error posible. XGBoost nos permitió utilizar hiperparámetros como `scale_pos_weight` y optimización Bayesiana (Optuna) para penalizar asimétricamente los errores. Esto, combinado con un ajuste fino del umbral de decisión (*Threshold Tuning*), nos permitió llevar el Recall por encima del 90% sin que el modelo colapsara, algo matemáticamente inviable con la Regresión Logística.
 4. **Explicabilidad Clínica (SHAP):** La medicina exige modelos interpretables (White-Box). La arquitectura basada en árboles de XGBoost se integra nativamente con la librería **SHAP**, permitiéndonos generar visualizaciones precisas que explican al médico el peso exacto que ha tenido cada biomarcador (CEA, ADC, etc.) en el diagnóstico individual de cada paciente.
 
+
+TODO
+mirar de justificar o probrar otros modelos del estilo
+
+pruebas con datos reales
+
+documetancion de datos + graficos
+benchmark modelo + explicar decision/metricas
+modelo analisis optuna y shap
+explicacion metricas con graficos
+
+explicar veces erroneas = dataset de jugeute(100% precision)...
+
+eliminar comentarios de ia
+
+añadir comentarios de explicacion en funciones + parametros de entrada + salida
 
 
 

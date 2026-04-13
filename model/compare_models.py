@@ -35,15 +35,9 @@ from xgboost import XGBClassifier
 
 warnings.filterwarnings("ignore")
 
-# ---------------------------------------------------------------------------
-# RUTAS
-# ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, "..", "Data", "processed", "dataset_clinico_tumoral.csv")
 
-# ---------------------------------------------------------------------------
-# CARGA DE DATOS
-# ---------------------------------------------------------------------------
 def cargar_datos(csv_path: str):
     df = pd.read_csv(csv_path)
     cols_excluir = ["Patient_ID", "Diagnosis"]
@@ -54,12 +48,6 @@ def cargar_datos(csv_path: str):
     print(f"Distribución de clases → 0 (Sano): {(y == 0).sum():,}  |  1 (Cáncer): {(y == 1).sum():,}")
     return X, y
 
-
-# ---------------------------------------------------------------------------
-# SCORER DE ESPECIFICIDAD (TNR = TN / (TN + FP))
-# La especificidad no existe en sklearn como scorer nativo.
-# recall_score con pos_label=0 es exactamente TNR.
-# ---------------------------------------------------------------------------
 specificity_scorer = make_scorer(recall_score, pos_label=0, zero_division=0)
 
 SCORERS = {
@@ -70,11 +58,6 @@ SCORERS = {
     "specificity":  specificity_scorer,
 }
 
-# ---------------------------------------------------------------------------
-# DEFINICIÓN DE MODELOS
-# Los modelos que requieren features escaladas van envueltos en un Pipeline
-# con StandardScaler para garantizar comparaciones justas.
-# ---------------------------------------------------------------------------
 scale_pos = None  # se calcula después de cargar los datos
 
 def get_modelos(scale_pos_weight: float) -> dict:
@@ -120,10 +103,6 @@ def get_modelos(scale_pos_weight: float) -> dict:
         ),
     }
 
-
-# ---------------------------------------------------------------------------
-# VALIDACIÓN CRUZADA
-# ---------------------------------------------------------------------------
 def evaluar_modelos(X: pd.DataFrame, y: pd.Series, modelos: dict, n_splits: int = 5) -> pd.DataFrame:
     cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
 
@@ -154,10 +133,6 @@ def evaluar_modelos(X: pd.DataFrame, y: pd.Series, modelos: dict, n_splits: int 
     df_res.index += 1   # índice 1-based para la tabla
     return df_res
 
-
-# ---------------------------------------------------------------------------
-# IMPRESIÓN DE LA TABLA
-# ---------------------------------------------------------------------------
 def imprimir_tabla(df_res: pd.DataFrame) -> None:
     col_widths = {
         "Modelo":      38,
@@ -198,10 +173,6 @@ def imprimir_tabla(df_res: pd.DataFrame) -> None:
     print("=" * 125)
     print()
 
-
-# ---------------------------------------------------------------------------
-# INTERPRETACIÓN AUTOMÁTICA DE LA COMPARATIVA
-# ---------------------------------------------------------------------------
 def imprimir_interpretacion(df_res: pd.DataFrame) -> None:
     """
     Extrae el AUC numérico del string 'X.XXXX ± ...' para hacer comparaciones.
@@ -231,10 +202,6 @@ def imprimir_interpretacion(df_res: pd.DataFrame) -> None:
     print("  Frente a la MLP, XGBoost es interpretable vía SHAP (requerimiento oncológico).")
     print("=" * 125)
 
-
-# ---------------------------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("\n" + "=" * 125)
     print("  INICIO DEL BENCHMARK  —  CRC Diagnostic Project  |  Nivel 2 (Clinical + Radiomic features)")
