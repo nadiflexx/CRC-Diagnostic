@@ -5,14 +5,41 @@ from src.database.models import Patient, TrainingImage, Visit
 
 
 class PatientRepository:
+    """
+    Data access layer for ``Patient`` records.
+
+    Provides CRUD operations and a fuzzy search method over the
+    ``Patient`` table. All methods operate within the ``Session``
+    supplied at construction time; the caller is responsible for
+    committing or rolling back the transaction.
+    """
+
     def __init__(self, db: Session):
+        """
+        Initialise the repository with a SQLAlchemy session.
+
+        Args:
+            db (Session): Active SQLAlchemy database session used for
+                all queries and mutations performed by this repository.
+        """
         self.db = db
 
     def create(self, **kwargs) -> Patient:
         """
-        Create a new patient.
-        :param kwargs: The patient's information.
-        :return: The created patient object.
+        Create and persist a new ``Patient`` record.
+
+        If both ``height_cm`` and ``weight_kg`` are provided the BMI is
+        automatically computed and stored before the record is flushed.
+
+        Args:
+            **kwargs: Column values for the new ``Patient`` row. Accepts
+                any attribute supported by the ``Patient`` model.
+                Commonly used keys include ``first_name``, ``last_name``,
+                ``external_id``, ``height_cm``, and ``weight_kg``.
+
+        Returns:
+            Patient: The newly created and flushed ``Patient`` instance
+                with its database-assigned ``id`` populated.
         """
         if kwargs.get("height_cm") and kwargs.get("weight_kg"):
             h_m = kwargs["height_cm"] / 100
@@ -24,20 +51,29 @@ class PatientRepository:
 
     def get_by_id(self, patient_id: int) -> Patient | None:
         """
-        Get a patient by their ID.
+        Retrieve a single patient by primary key.
 
-        :param patient_id: The ID of the patient to retrieve.
-        :return: The patient object if found, otherwise None.
+        Args:
+            patient_id (int): Primary key of the patient to retrieve.
+
+        Returns:
+            Patient | None: The matching ``Patient`` instance, or ``None``
+                if no record with the given ID exists.
         """
         return self.db.query(Patient).filter(Patient.id == patient_id).first()
 
     def get_all(self, skip: int = 0, limit: int = 100):
         """
-        Get all patients.
+        Retrieve a paginated list of all patients.
 
-        :param skip: The number of records to skip.
-        :param limit: The maximum number of records to retrieve.
-        :return: A list of patient objects.
+        Args:
+            skip (int): Number of records to skip (offset). Default is 0.
+            limit (int): Maximum number of records to return. Default is
+                100.
+
+        Returns:
+            list[Patient]: List of ``Patient`` instances within the
+                requested page.
         """
         return self.db.query(Patient).offset(skip).limit(limit).all()
 
@@ -45,8 +81,16 @@ class PatientRepository:
         """
         Search for patients by first name, last name, or external ID.
 
-        :param query: The search query.
-        :return: A list of patient objects that match the search criteria.
+        Performs a case-insensitive ``ILIKE`` pattern match on all three
+        fields and returns every patient that matches at least one of them.
+
+        Args:
+            query (str): Search string. The pattern ``%query%`` is applied
+                to ``first_name``, ``last_name``, and ``external_id``.
+
+        Returns:
+            list[Patient]: All ``Patient`` records whose first name, last
+                name, or external ID contains ``query`` (case-insensitive).
         """
         pattern = f"%{query}%"
         return (
@@ -61,12 +105,18 @@ class PatientRepository:
 
     def update(self, patient_id: int, **kwargs) -> Patient | None:
         """
-        Update a patient's information.
-        :param patient_id: The ID of the patient to update.
-        :param kwargs: The updated patient information.
-        :return: The updated patient object if found, otherwise None.
-        """
+        Update an existing patient record with new field values.
 
+        Args:
+            patient_id (int): Primary key of the patient to update.
+            **kwargs: Column-value pairs to set on the ``Patient``
+                instance.
+
+        Returns:
+            Patient | None: The updated ``Patient`` instance after
+                flushing, or ``None`` if no patient with the given ID
+                exists.
+        """
         patient = self.get_by_id(patient_id)
         if patient:
             for k, v in kwargs.items():
@@ -76,9 +126,14 @@ class PatientRepository:
 
     def delete(self, patient_id: int) -> bool:
         """
-        Delete a patient by their ID.
-        :param patient_id: The ID of the patient to delete.
-        :return: True if the patient was deleted successfully, otherwise False.
+        Delete a patient record by primary key.
+
+        Args:
+            patient_id (int): Primary key of the patient to delete.
+
+        Returns:
+            bool: ``True`` if the patient was found and marked for
+                deletion, ``False`` if no matching record exists.
         """
         patient = self.get_by_id(patient_id)
         if patient:
@@ -88,15 +143,36 @@ class PatientRepository:
 
 
 class VisitRepository:
+    """
+    Data access layer for ``Visit`` records.
+
+    Provides creation, retrieval, and update operations scoped to a
+    single SQLAlchemy session. Visit records are always associated with
+    a parent ``Patient`` via ``patient_id``.
+    """
+
     def __init__(self, db: Session):
+        """
+        Initialise the repository with a SQLAlchemy session.
+
+        Args:
+            db (Session): Active SQLAlchemy database session used for
+                all queries and mutations performed by this repository.
+        """
         self.db = db
 
     def create(self, patient_id: int, **kwargs) -> Visit:
         """
-        Create a new visit for a patient.
-        :param patient_id: The ID of the patient.
-        :param kwargs: The visit information.
-        :return: The created visit object.
+        Create and persist a new ``Visit`` record linked to a patient.
+
+        Args:
+            patient_id (int): Primary key of the ``Patient`` this visit
+                belongs to.
+            **kwargs: Additional column values for the ``Visit`` row
+                (e.g. ``visit_date``, ``notes``, ``diagnosis``).
+
+        Returns:
+            Visit: The newly created and flushed ``Visit`` instance.
         """
         visit = Visit(patient_id=patient_id, **kwargs)
         self.db.add(visit)
@@ -105,18 +181,28 @@ class VisitRepository:
 
     def get_by_id(self, visit_id: int) -> Visit | None:
         """
-        Get a visit by its ID.
-        :param visit_id: The ID of the visit to retrieve.
-        :return: The visit object if found, otherwise None.
+        Retrieve a single visit by primary key.
+
+        Args:
+            visit_id (int): Primary key of the visit to retrieve.
+
+        Returns:
+            Visit | None: The matching ``Visit`` instance, or ``None``
+                if no record with the given ID exists.
         """
         return self.db.query(Visit).filter(Visit.id == visit_id).first()
 
     def get_patient_visits(self, patient_id: int):
         """
-        Get all visits for a patient.
+        Retrieve all visits for a specific patient, newest first.
 
-        :param patient_id: The ID of the patient.
-        :return: A list of visit objects for the patient.
+        Args:
+            patient_id (int): Primary key of the patient whose visits
+                should be retrieved.
+
+        Returns:
+            list[Visit]: All ``Visit`` records for the patient ordered
+                by ``visit_date`` descending.
         """
         return (
             self.db.query(Visit)
@@ -127,9 +213,15 @@ class VisitRepository:
 
     def get_last_visit(self, patient_id: int) -> Visit | None:
         """
-        Get the last visit for a patient.
-        :param patient_id: The ID of the patient.
-        :return: The last visit object for the patient, or None if no visits exist.
+        Retrieve the most recent visit for a specific patient.
+
+        Args:
+            patient_id (int): Primary key of the patient.
+
+        Returns:
+            Visit | None: The ``Visit`` record with the latest
+                ``visit_date`` for the patient, or ``None`` if the
+                patient has no visits.
         """
         return (
             self.db.query(Visit)
@@ -140,11 +232,15 @@ class VisitRepository:
 
     def update(self, visit_id: int, **kwargs) -> Visit | None:
         """
-        Update a visit's information.
+        Update an existing visit record with new field values.
 
-        :param visit_id: The ID of the visit to update.
-        :param kwargs: The updated visit information.
-        :return: The updated visit object if found, otherwise None.
+        Args:
+            visit_id (int): Primary key of the visit to update.
+            **kwargs: Column-value pairs to set on the ``Visit`` instance.
+
+        Returns:
+            Visit | None: The updated ``Visit`` instance after flushing,
+                or ``None`` if no visit with the given ID exists.
         """
         visit = self.get_by_id(visit_id)
         if visit:
@@ -155,14 +251,40 @@ class VisitRepository:
 
 
 class TrainingImageRepository:
+    """
+    Data access layer for ``TrainingImage`` records.
+
+    Supports bulk insertion, split-based retrieval, aggregated
+    statistics, and full-table queries used throughout the training
+    and evaluation pipelines.
+    """
+
     def __init__(self, db: Session):
+        """
+        Initialise the repository with a SQLAlchemy session.
+
+        Args:
+            db (Session): Active SQLAlchemy database session used for
+                all queries and mutations performed by this repository.
+        """
         self.db = db
 
     def bulk_insert(self, images: list[dict]):
         """
-        Bulk insert training images into the database.
-        :param images: A list of image dictionaries.
-        :return: The number of images inserted.
+        Bulk-insert a list of training image records.
+
+        Constructs ``TrainingImage`` ORM objects from the provided
+        dictionaries and uses ``bulk_save_objects`` for efficiency.
+
+        Args:
+            images (list[dict]): List of dictionaries where each entry
+                contains column-value pairs for a ``TrainingImage`` row.
+                Common keys include ``file_path``, ``mask_path``,
+                ``label``, ``split``, ``dataset_source``, ``width``,
+                and ``height``.
+
+        Returns:
+            int: Number of records inserted into the database.
         """
         objs = [TrainingImage(**img) for img in images]
         self.db.bulk_save_objects(objs)
@@ -171,16 +293,29 @@ class TrainingImageRepository:
 
     def get_by_split(self, split: str):
         """
-        Get all training images for a specific split.
-        :param split: The split to retrieve images for.
-        :return: A list of training image objects.
+        Retrieve all training images belonging to a specific data split.
+
+        Args:
+            split (str): Name of the split to query. Expected values are
+                ``"train"``, ``"val"``, or ``"test"``.
+
+        Returns:
+            list[TrainingImage]: All ``TrainingImage`` records whose
+                ``split`` column matches the provided value.
         """
         return self.db.query(TrainingImage).filter(TrainingImage.split == split).all()
 
     def get_stats(self):
         """
-        Get statistics for training images.
-        :return: A list of statistics.
+        Return aggregate counts grouped by label and split.
+
+        Useful for quickly inspecting the class and split distribution
+        of the full training image collection without loading all rows.
+
+        Returns:
+            list[tuple[int, str, int]]: Each tuple contains
+                ``(label, split, count)`` where ``count`` is the number
+                of records with that label/split combination.
         """
         return (
             self.db.query(
@@ -192,7 +327,10 @@ class TrainingImageRepository:
 
     def get_all(self):
         """
-        Get all training images.
-        :return: A list of training image objects.
+        Retrieve every training image record from the database.
+
+        Returns:
+            list[TrainingImage]: Complete list of all ``TrainingImage``
+                instances stored in the database.
         """
         return self.db.query(TrainingImage).all()

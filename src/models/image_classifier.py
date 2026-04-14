@@ -11,6 +11,21 @@ from src.core.interfaces import BaseClassifier
 
 
 class ColonCancerClassifier(BaseClassifier):
+    """
+    EfficientNetV2-S image classifier for 3-class colon cancer detection.
+
+    Architecture:
+        - Backbone: any Timm model (default ``tf_efficientnetv2_s.in21k``),
+          instantiated with ``num_classes=0`` so that it outputs raw feature
+          maps rather than class logits.
+        - Classification head: ``AdaptiveAvgPool2d → Flatten → Dropout →
+          Linear(feature_dim, 512) → BatchNorm1d → SiLU → Dropout/2 →
+          Linear(512, num_classes)``.
+
+    The backbone and head are trained end-to-end. The three output logits
+    correspond to the classes Normal, Polyp, and Inflammation.
+    """
+
     def __init__(
         self,
         model_name="tf_efficientnetv2_s.in21k",
@@ -18,6 +33,20 @@ class ColonCancerClassifier(BaseClassifier):
         dropout=0.4,
         num_classes=3,
     ):
+        """
+        Initialise the colon cancer classifier.
+
+        Args:
+            model_name (str): Timm model identifier. The backbone is
+                created with ``num_classes=0`` to expose raw feature maps.
+                Default is ``"tf_efficientnetv2_s.in21k"``.
+            pretrained (bool): Whether to load ImageNet-21k pretrained
+                weights for the backbone. Default is ``True``.
+            dropout (float): Dropout probability applied after the first
+                linear layer. Half of this value is applied before the
+                final linear layer. Default is 0.4.
+            num_classes (int): Number of output logits. Default is 3.
+        """
         super().__init__()
         self.num_classes = num_classes
         self.backbone = timm.create_model(
@@ -37,20 +66,31 @@ class ColonCancerClassifier(BaseClassifier):
 
     def forward(self, x):
         """
-        Forward pass through the model.
+        Perform a full forward pass through backbone and classification head.
 
-        :param x: Input tensor
-        :return: Output tensor
+        Args:
+            x (torch.Tensor): Input image batch of shape (N, 3, H, W).
+
+        Returns:
+            torch.Tensor: Class logit tensor of shape (N, num_classes).
         """
         features = self.backbone.forward_features(x)
         return self.classifier(features)
 
     def predict_proba(self, x):
         """
-        Predict the probability of each class for the given input.
+        Return softmax class probabilities for the given input batch.
 
-        :param x: Input tensor
-        :return: Probability tensor
+        The model is set to evaluation mode and gradients are disabled
+        for the duration of this call.
+
+        Args:
+            x (torch.Tensor): Input image batch of shape (N, 3, H, W).
+
+        Returns:
+            torch.Tensor: Probability tensor of shape (N, num_classes)
+                with values in [0, 1] summing to 1 along the class
+                dimension.
         """
         self.eval()
         with torch.no_grad():
@@ -59,10 +99,44 @@ class ColonCancerClassifier(BaseClassifier):
 
 class FocalLoss(nn.Module):
     """
-    Focal loss for multi-class classification.
+    Focal loss with label smoothing for multi-class classification.
+
+    Focal loss down-weights well-classified examples so that the model
+    focuses training signal on hard or misclassified samples.
+
+    Reference: Lin et al. (2017) "Focal Loss for Dense Object Detection".
+
+    The label-smoothing term replaces the one-hot target with a soft
+    distribution, reducing overconfidence:
+
+        smooth_target[correct] = 1 - smoothing
+        smooth_target[others]  = smoothing / (num_classes - 1)
+
+    The final per-sample loss is:
+
+        loss = -sum(smooth_target * focal_weight * log_probs)
+
+    where ``focal_weight = alpha_t * (1 - p_t)^gamma``.
     """
 
     def __init__(self, alpha=None, gamma=2.0, num_classes=3, label_smoothing=0.1):
+        """
+        Initialise the focal loss.
+
+        Args:
+            alpha (list[float] | None): Per-class weighting factors of
+                length ``num_classes``. Typically set to balanced class
+                weights to counteract label imbalance. If ``None``, all
+                classes are weighted equally. Default is ``None``.
+            gamma (float): Focusing parameter that controls the rate at
+                which easy examples are down-weighted. Higher values
+                increase focus on hard samples. Default is 2.0.
+            num_classes (int): Number of output classes. Used to construct
+                the smooth label distribution. Default is 3.
+            label_smoothing (float): Smoothing factor in [0, 1). A value
+                of 0 corresponds to standard one-hot targets. Default is
+                0.1.
+        """
         super().__init__()
         self.gamma = gamma
         self.num_classes = num_classes
@@ -73,11 +147,21 @@ class FocalLoss(nn.Module):
 
     def forward(self, inputs, targets):
         """
-        Forward pass through the Focal loss.
+        Compute the focal loss for a batch of predictions.
 
-        :param inputs: Input tensor
-        :param targets: Target tensor
-        :return: Loss tensor
+        Constructs a smoothed target distribution, computes per-class
+        log-softmax, applies the focal modulation factor
+        ``(1 - p_t)^gamma``, optionally scales by class weights
+        ``alpha``, and returns the mean loss over the batch.
+
+        Args:
+            inputs (torch.Tensor): Raw logit tensor of shape
+                (N, num_classes).
+            targets (torch.Tensor): Integer class label tensor of shape
+                (N,) with values in ``[0, num_classes)``.
+
+        Returns:
+            torch.Tensor: Scalar mean focal loss over the batch.
         """
         with torch.no_grad():
             true_dist = torch.zeros_like(inputs)

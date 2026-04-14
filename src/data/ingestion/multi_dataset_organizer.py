@@ -35,12 +35,39 @@ from src.database.repositories import TrainingImageRepository
 
 class MultiDatasetOrganizer:
     """
-    Organizes and mixes multiple datasets for colon cancer classification.
-    By mixing sources per class, frame/border artifacts are distributed
-    uniformly and stop being predictive.
+    Orchestrates the collection, balancing, preprocessing, and database
+    registration of images from four colonoscopy datasets:
+    HyperKvasir, CVC-ClinicDB, LIMUC, and Curated Colon.
+
+    By mixing images from multiple sources within each class the model
+    cannot exploit frame or border artifacts that are unique to a single
+    acquisition system, reducing the risk of learning non-tissue shortcuts.
+
+    Pipeline:
+        1. Collect images from all available raw sources.
+        2. Log and optionally subsample to ``target_per_class`` images
+           per class using source-stratified sampling.
+        3. Copy selected images to a clean directory with unified naming.
+        4. Run multi-source standardisation preprocessing.
+        5. Build per-image records with mask and metadata.
+        6. Create source-stratified train / val / test splits.
+        7. Register all records in the database.
+        8. Verify source diversity and the absence of data leakage.
+        9. Run the tissue-only preprocessor.
     """
 
     def __init__(self, target_per_class: int = 2000, seed: int = 42):
+        """
+        Initialise the organizer with dataset paths and sampling parameters.
+
+        Args:
+            target_per_class (int): Maximum number of images to retain per
+                class after source-stratified subsampling. If fewer images
+                are available for a class all of them are kept and a warning
+                is logged. Default is 2000.
+            seed (int): Random seed used for reproducible shuffling and
+                stratified splitting. Default is 42.
+        """
         self.target_per_class = target_per_class
         self.seed = seed
         random.seed(seed)
@@ -58,7 +85,11 @@ class MultiDatasetOrganizer:
 
     def run(self):
         """
-        Run the multi-source dataset organization process.
+        Execute the complete multi-source dataset organization pipeline.
+
+        Removes and recreates both the clean and processed output
+        directories, then runs all nine pipeline phases in sequence.
+        Logs progress at each phase boundary.
         """
         logger.info("\n" + "=" * 70)
         logger.info("MULTI-SOURCE DATASET ORGANIZER (4 DATASETS)")
@@ -90,7 +121,11 @@ class MultiDatasetOrganizer:
 
     def _start_tissue_preprocessor(self):
         """
-        Start the tissue-only preprocessor.
+        Trigger the tissue-only preprocessing step after the main pipeline.
+
+        Calls ``process_dataset_tissue_only`` with fixed parameters
+        (``target_size=384``, ``n_crops=5``, ``max_black_pct=0.5``) and
+        logs the outcome.
         """
         logger.info("\nSTARTING TISSUE PREPROCESSOR")
         process_dataset_tissue_only(target_size=384, n_crops=5, max_black_pct=0.5)
@@ -98,7 +133,11 @@ class MultiDatasetOrganizer:
 
     def _collect_all_sources(self):
         """
-        Collect images from all available sources.
+        Dispatch collection from all four raw dataset sources.
+
+        Calls ``_collect_hyperkvasir``, ``_collect_cvc_clinicdb``,
+        ``_collect_limuc``, and ``_collect_curated_colon`` in order.
+        Results are accumulated in ``self.collected``.
         """
         logger.info("\n═══ Phase 1: Collecting from all sources ═══")
         self._collect_hyperkvasir()
@@ -108,7 +147,16 @@ class MultiDatasetOrganizer:
 
     def _collect_hyperkvasir(self):
         """
-        Collect images from HyperKvasir.
+        Scan the HyperKvasir raw directory and collect images per class.
+
+        Looks for a labeled-images subdirectory using several candidate
+        path patterns. For polyp images a matching mask is looked up in
+        the segmented-images directory when available. Each discovered
+        image is appended to ``self.collected[class_name]`` with source
+        metadata.
+
+        Logs a warning and returns early if the HyperKvasir root
+        directory is not found.
         """
         logger.info("\n  📦 HyperKvasir:")
         labeled_dir = self._find_dir(
@@ -158,7 +206,15 @@ class MultiDatasetOrganizer:
 
     def _collect_cvc_clinicdb(self):
         """
-        Collect images from CVC-ClinicDB.
+        Scan the CVC-ClinicDB raw directory and collect polyp images.
+
+        Searches for the image directory using several candidate path
+        patterns. Attempts to locate a paired ground-truth mask for each
+        image by trying common extensions. All images are assigned to the
+        ``"polyp"`` class.
+
+        Logs a warning and returns early if the CVC-ClinicDB root
+        directory is not found.
         """
         logger.info("\n  📦 CVC-ClinicDB:")
         img_dir = self._find_dir(
@@ -204,7 +260,16 @@ class MultiDatasetOrganizer:
 
     def _collect_limuc(self):
         """
-        Collect images from LIMUC.
+        Scan the LIMUC dataset and collect images grouped by Mayo score.
+
+        Discovers patient directories using ``_find_limuc_patient_dirs``
+        and maps each Mayo score to a class name as defined in
+        ``SOURCE_MAP["limuc"]``. Images are appended with a
+        ``patient_id`` field to support patient-level splitting if
+        needed.
+
+        Logs a warning and returns early if the LIMUC root directory or
+        patient folders are not found.
         """
         logger.info("\n  📦 LIMUC:")
         if not self.limuc_raw.exists():
@@ -251,7 +316,16 @@ class MultiDatasetOrganizer:
 
     def _collect_curated_colon(self):
         """
-        Collect images from Curated Colon.
+        Scan the Curated Colon raw directory and classify images by folder name.
+
+        Recursively searches all subdirectories. Each directory whose
+        name contains a keyword from ``POLYP_KEYWORDS`` is assigned to
+        the ``"polyp"`` class; directories matching ``NORMAL_KEYWORDS``
+        are assigned to ``"normal"``. Directories matching neither
+        keyword set are skipped.
+
+        Logs a warning and returns early if the Curated Colon root
+        directory does not exist or no classifiable folders are found.
         """
         logger.info("\n  📦 Curated Colon:")
         if not self.curated_raw.exists():
@@ -299,7 +373,11 @@ class MultiDatasetOrganizer:
 
     def _log_source_distribution(self):
         """
-        Log the distribution of images across sources.
+        Log the total image count and per-source breakdown for each class.
+
+        Also emits a warning if any class has images from only a single
+        source, as this indicates insufficient source diversity to break
+        shortcut features.
         """
         logger.info("\n═══ Phase 2: Source Distribution ═══")
         for class_name in CLASS_CONFIG:
@@ -315,7 +393,17 @@ class MultiDatasetOrganizer:
 
     def _balance_and_copy(self):
         """
-        Balance and copy images to the clean directory.
+        Subsample each class to ``target_per_class`` and copy to the clean directory.
+
+        For classes with more images than the target, a source-stratified
+        subsample is drawn via ``_stratified_subsample``. For classes
+        with fewer images a warning is logged but all available images
+        are used.
+
+        Each image is renamed to
+        ``<source_detail>[_<patient_id>]_<original_filename>`` to ensure
+        globally unique filenames. When a mask is present it is copied to
+        ``clean_dir/masks/`` with the same stem.
         """
         logger.info(f"\n═══ Phase 3: Balancing to {self.target_per_class}/class ═══")
         for class_name in CLASS_CONFIG:
@@ -331,7 +419,8 @@ class MultiDatasetOrganizer:
                 logger.info(f"  {class_name}: {total} → {len(records)} (subsampled)")
             elif total < self.target_per_class:
                 logger.warning(
-                    f"  {class_name}: only {total} available (target: {self.target_per_class})"
+                    f"  {class_name}: only {total} available "
+                    f"(target: {self.target_per_class})"
                 )
 
             class_dir = self.clean_dir / class_name
@@ -362,12 +451,23 @@ class MultiDatasetOrganizer:
 
     def _stratified_subsample(self, records, target, key):
         """
-        Perform stratified subsampling of records.
+        Draw a source-stratified subsample of ``target`` records.
 
-        :param records: The list of records to sample from.
-        :param target: The target number of records to select.
-        :param key: The key to use for stratification.
-        :return: A list of sampled records.
+        Each source group receives a number of samples proportional to
+        its share of the total. The last group absorbs any rounding
+        remainder to guarantee exactly ``target`` records are returned
+        when enough data is available.
+
+        Args:
+            records (list[dict]): Full list of image record dictionaries,
+                each containing at least the field named by ``key``.
+            target (int): Total number of records to select.
+            key (str): Record field used to define strata (e.g.
+                ``"source"``).
+
+        Returns:
+            list[dict]: Sampled records totalling at most ``target``
+                entries, preserving source proportions.
         """
         by_group = defaultdict(list)
         for r in records:
@@ -391,7 +491,16 @@ class MultiDatasetOrganizer:
 
     def _build_processed_records(self):
         """
-        Build records for the processed dataset.
+        Scan the processed directory and build per-image metadata records.
+
+        For each image found in the processed class subdirectories, the
+        method resolves the source identifier from the filename stem,
+        looks up any aligned mask in both the processed and clean mask
+        directories, reads the image dimensions via PIL, and appends a
+        complete record dictionary to ``self.image_records``.
+
+        Logs the number of images and masks found per class, as well as
+        totals across the full dataset.
         """
         logger.info("\n═══ Phase 5: Building Records ═══")
         self.image_records = []
@@ -462,7 +571,16 @@ class MultiDatasetOrganizer:
 
     def _create_source_stratified_splits(self):
         """
-        Create stratified splits based on source.
+        Assign each record to train, val, or test using composite stratification.
+
+        Composite labels are formed as ``<class_name>_<source>`` so that
+        the class and source distribution is preserved across all three
+        splits. If any composite group has fewer than four samples the
+        method falls back to class-only stratification.
+
+        Split proportions: 70% train / 15% val / 15% test.
+        The ``"split"`` key is written directly into each record in
+        ``self.image_records``.
         """
         logger.info("\n═══ Phase 6: Stratified Split (class + source) ═══")
 
@@ -511,15 +629,21 @@ class MultiDatasetOrganizer:
             by_source = Counter(r["source"] for r in records)
             logger.info(f"  {split.upper():5s}: {len(records):4d}")
             logger.info(
-                f"         classes:  {', '.join(f'{k}={v}' for k, v in sorted(by_class.items()))}"
+                f"         classes:  "
+                f"{', '.join(f'{k}={v}' for k, v in sorted(by_class.items()))}"
             )
             logger.info(
-                f"         sources:  {', '.join(f'{k}={v}' for k, v in sorted(by_source.items()))}"
+                f"         sources:  "
+                f"{', '.join(f'{k}={v}' for k, v in sorted(by_source.items()))}"
             )
 
     def setup_database(self):
         """
-        Setup the database tables.
+        Create all database tables defined in ``Base.metadata``.
+
+        Should be called once before attempting to insert records if the
+        tables do not yet exist. Safe to call multiple times; existing
+        tables are not modified.
         """
         logger.info("Creating database tables...")
         Base.metadata.create_all(bind=engine)
@@ -527,7 +651,12 @@ class MultiDatasetOrganizer:
 
     def _register_in_database(self):
         """
-        Register the processed images in the database.
+        Persist all processed image records to the database.
+
+        Checks whether the ``TrainingImage`` table exists and creates it
+        if not. Deletes any existing rows before inserting the new
+        records via ``TrainingImageRepository.bulk_insert`` to ensure
+        idempotent runs.
         """
         logger.info("\n═══ Phase 7: Registering in DB ═══")
 
@@ -556,7 +685,14 @@ class MultiDatasetOrganizer:
 
     def _verify_source_mixing(self):
         """
-        Verify that each class has images from multiple sources in each split.
+        Verify source diversity and the absence of data leakage across splits.
+
+        For each (split, class) combination, logs the number of images
+        and distinct sources. A warning is emitted if any combination
+        has images from only one source.
+
+        Subsequently checks that no image filename appears in more than
+        one split. Logs an error if overlaps are detected.
         """
         logger.info("\n═══ Phase 8: Anti-Leakage Verification ═══")
         issues = []
@@ -571,7 +707,8 @@ class MultiDatasetOrganizer:
                 n_sources = len(sources)
                 status = "✅" if n_sources >= 2 else "⚠️"
                 logger.info(
-                    f"  {status} {split}/{class_name}: {len(records)} imgs, {n_sources} source(s): {sources}"
+                    f"  {status} {split}/{class_name}: {len(records)} imgs, "
+                    f"{n_sources} source(s): {sources}"
                 )
                 if n_sources < 2:
                     issues.append(f"{split}/{class_name}")
@@ -602,7 +739,16 @@ class MultiDatasetOrganizer:
 
     def _find_limuc_patient_dirs(self):
         """
-        Find LIMUC patient directories.
+        Locate LIMUC patient directories by scanning the raw root.
+
+        Searches the LIMUC root and known subdirectory patterns for
+        directories whose names are purely numeric and that contain at
+        least one Mayo score folder with images. Falls back to a full
+        recursive scan if the primary search yields no results.
+
+        Returns:
+            list[Path]: Sorted list of patient directory paths, ordered
+                by numeric patient ID.
         """
         patient_dirs = []
         search_roots = [
@@ -634,7 +780,17 @@ class MultiDatasetOrganizer:
 
     def _has_mayo_folders(self, base):
         """
-        Check if a base directory has Mayo folders.
+        Check whether a directory contains at least one non-empty Mayo score folder.
+
+        Tests all combinations of Mayo scores (0–3) and folder name
+        patterns from ``MAYO_FOLDER_PATTERNS``.
+
+        Args:
+            base (Path): Directory to inspect.
+
+        Returns:
+            bool: ``True`` if at least one Mayo score folder is found
+                and contains at least one image file, ``False`` otherwise.
         """
         for score in ["0", "1", "2", "3"]:
             for pattern in MAYO_FOLDER_PATTERNS:
@@ -645,7 +801,19 @@ class MultiDatasetOrganizer:
 
     def _find_mayo_folder(self, base, score):
         """
-        Find a Mayo folder in a base directory.
+        Locate the Mayo score subfolder for a given patient directory.
+
+        Tries each pattern in ``MAYO_FOLDER_PATTERNS`` with the
+        provided score substituted in.
+
+        Args:
+            base (Path): Patient-level directory to search within.
+            score (str): Mayo score string (``"0"``, ``"1"``, ``"2"``,
+                or ``"3"``).
+
+        Returns:
+            Path | None: Path to the first matching directory, or
+                ``None`` if no pattern matches.
         """
         for pattern in MAYO_FOLDER_PATTERNS:
             d = base / pattern.format(score=score)
@@ -655,7 +823,17 @@ class MultiDatasetOrganizer:
 
     def _find_dir(self, base, candidates):
         """
-        Find a directory in a base directory.
+        Return the first existing subdirectory from a list of candidates.
+
+        Args:
+            base (Path): Root directory to search within.
+            candidates (list[str]): Relative path strings to try in
+                order. The special value ``"."`` refers to ``base``
+                itself.
+
+        Returns:
+            Path | None: The first candidate that exists as a directory,
+                or ``None`` if none are found or ``base`` does not exist.
         """
         if not base.exists():
             return None
@@ -667,7 +845,14 @@ class MultiDatasetOrganizer:
 
     def _glob_images(self, directory):
         """
-        Glob images in a directory.
+        Return all image files in a directory matching known extensions.
+
+        Args:
+            directory (Path): Directory to scan.
+
+        Returns:
+            list[Path]: Sorted list of image file paths whose suffix
+                appears in ``IMAGE_EXTENSIONS``.
         """
         images = []
         for ext in IMAGE_EXTENSIONS:
@@ -676,7 +861,13 @@ class MultiDatasetOrganizer:
 
     def _save_mapping(self):
         """
-        Save the class mapping.
+        Write the class mapping JSON to both the clean and processed directories.
+
+        The mapping includes project metadata, the number of classes, a
+        label-to-class-name dictionary, per-class clinical information,
+        and the list of dataset sources. The file is saved as
+        ``class_mapping.json`` in both directories; parent directories
+        are created if they do not exist.
         """
         logger.info("\n═══ Phase 9: Saving Class Mapping ═══")
         mapping = {

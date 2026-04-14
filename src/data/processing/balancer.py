@@ -13,13 +13,31 @@ from src.config.logger import log as logger
 
 
 class DataBalancer:
+    """
+    Collection of static methods for analysing and correcting class
+    imbalance in tabular datasets.
+
+    Supports oversampling (SMOTE, ADASYN, SMOTETomek), random
+    undersampling, class-weight computation, and balance reporting.
+    All methods are stateless and operate directly on NumPy arrays.
+    """
+
     @staticmethod
     def check_balance(y: np.ndarray) -> dict:
         """
-        Check the balance of the dataset.
+        Report the class distribution and balance ratio of a label array.
 
-        :param y: Array of class labels.
-        :return: Dictionary with balance information.
+        Args:
+            y (np.ndarray): 1-D integer array of class labels.
+
+        Returns:
+            dict: Dictionary with one entry per class (keyed by integer
+                class index) plus two summary keys:
+                    - Per-class entry: ``{"count": int, "percentage": float}``.
+                    - ``"balance_ratio"`` (float): Ratio of the minority
+                      to the majority class count, in [0, 1].
+                    - ``"is_balanced"`` (bool): ``True`` if the ratio
+                      exceeds 0.7.
         """
         unique, counts = np.unique(y, return_counts=True)
         total = len(y)
@@ -38,12 +56,26 @@ class DataBalancer:
     @staticmethod
     def oversample_minority(X, y, strategy="smote"):
         """
-        Oversample the minority class.
+        Oversample the minority class using a resampling technique.
 
-        :param X: Array of features.
-        :param y: Array of class labels.
-        :param strategy: Oversampling strategy.
-        :return: Oversampled features and labels.
+        Args:
+            X (array-like of shape (n_samples, n_features)): Feature
+                matrix.
+            y (array-like of shape (n_samples,)): Class labels.
+            strategy (str): Resampling algorithm to apply. One of:
+                - ``"smote"``: Synthetic Minority Over-sampling Technique.
+                - ``"adasyn"``: Adaptive Synthetic Sampling.
+                - ``"smote_tomek"``: SMOTE followed by Tomek link removal.
+                Default is ``"smote"``.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]:
+                - Resampled feature matrix.
+                - Resampled label array.
+
+        Raises:
+            ValueError: If ``strategy`` is not one of the supported
+                values.
         """
         if strategy == "smote":
             sampler = SMOTE(random_state=42, k_neighbors=5)
@@ -60,12 +92,20 @@ class DataBalancer:
     @staticmethod
     def undersample_majority(X, y, target_ratio=1.0):
         """
-        Undersample the majority class.
+        Randomly undersample the majority class to achieve a target ratio.
 
-        :param X: Array of features.
-        :param y: Array of class labels.
-        :param target_ratio: Target ratio of minority to majority class sizes.
-        :return: Undersampled features and labels.
+        Args:
+            X (np.ndarray of shape (n_samples, n_features)): Feature
+                matrix.
+            y (np.ndarray of shape (n_samples,)): Class labels.
+            target_ratio (float): Desired ratio of minority to majority
+                class samples after undersampling. A value of 1.0
+                produces a perfectly balanced dataset. Default is 1.0.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]:
+                - Undersampled feature matrix.
+                - Undersampled label array, shuffled.
         """
         unique, counts = np.unique(y, return_counts=True)
         minority_class = unique[np.argmin(counts)]
@@ -86,10 +126,19 @@ class DataBalancer:
     @staticmethod
     def compute_class_weights(y: np.ndarray) -> dict:
         """
-        Compute class weights.
+        Compute balanced class weights for use in a weighted loss function.
 
-        :param y: Array of class labels.
-        :return: Dictionary of class weights.
+        Uses scikit-learn's ``compute_class_weight`` with
+        ``class_weight="balanced"`` so that each class contributes
+        equally to the total loss regardless of its sample count.
+
+        Args:
+            y (np.ndarray of shape (n_samples,)): Integer class labels
+                from the training split.
+
+        Returns:
+            dict[int, float]: Dictionary mapping each integer class index
+                to its corresponding weight value.
         """
         classes = np.unique(y)
         weights = compute_class_weight("balanced", classes=classes, y=y)

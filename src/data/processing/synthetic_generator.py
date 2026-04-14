@@ -11,7 +11,13 @@ from src.config.logger import log as logger
 
 class SyntheticPatientGenerator:
     """
-    Synthetic patient data generator.
+    Generator for synthetic clinical patient records with realistic
+    physiological distributions and inter-feature correlations.
+
+    Produces both healthy and cancer patient cohorts across multiple
+    severity sub-groups so that the resulting dataset has controlled
+    class overlap, making it suitable for training and evaluating
+    tabular cancer risk models without using real patient data.
     """
 
     CONTINUOUS_FEATURES = [
@@ -32,14 +38,35 @@ class SyntheticPatientGenerator:
     ]
 
     def __init__(self, seed: int = 42):
+        """
+        Initialise the generator with a fixed random seed.
+
+        Args:
+            seed (int): Seed for ``numpy.random.default_rng`` to ensure
+                reproducibility across runs. Default is 42.
+        """
         self.rng = np.random.default_rng(seed)
 
     def generate_healthy_patients(self, n: int) -> pd.DataFrame:
         """
-        Generate healthy patients.
+        Generate a stratified cohort of healthy (non-cancer) patients.
 
-        :param n: Number of healthy patients to generate.
-        :return: DataFrame containing generated healthy patients.
+        The cohort is composed of four sub-groups that differ in their
+        baseline risk profiles:
+            - 55%: Clean healthy (low risk factors).
+            - 20%: Healthy with risk factors (e.g. obesity, smoking).
+            - 17%: Healthy with altered lab values (borderline anaemia,
+              elevated inflammation).
+            - 8%: Tricky cases that resemble early cancer profiles.
+
+        After concatenation, all rows have ``has_cancer = False``.
+
+        Args:
+            n (int): Total number of healthy patients to generate.
+
+        Returns:
+            pd.DataFrame: Shuffled DataFrame with ``n`` rows and all
+                clinical feature columns plus ``has_cancer = False``.
         """
         logger.info(f"Generating {n} healthy patients...")
         n_clean = int(n * 0.55)
@@ -61,10 +88,18 @@ class SyntheticPatientGenerator:
 
     def _healthy_clean(self, n):
         """
-        Generate clean healthy patients.
+        Generate clean healthy patients with low baseline risk.
 
-        :param n: Number of clean healthy patients to generate.
-        :return: DataFrame containing generated clean healthy patients.
+        All continuous features are sampled from normal or exponential
+        distributions parameterised to reflect typical values for a
+        healthy population without significant risk factors.
+
+        Args:
+            n (int): Number of patients to generate.
+
+        Returns:
+            pd.DataFrame: DataFrame with ``n`` rows and all feature
+                columns (continuous, categorical, binary).
         """
         smoked = self.rng.binomial(1, 0.28, n)
         pack_years = smoked * self.rng.exponential(4.0, n)
@@ -95,10 +130,18 @@ class SyntheticPatientGenerator:
 
     def _healthy_with_risk_factors(self, n):
         """
-        Generate patients with risk factors.
+        Generate healthy patients with moderate lifestyle risk factors.
 
-        :param n: Number of patients with risk factors to generate.
-        :return: DataFrame containing generated patients with risk factors.
+        Elevated smoking rates, higher BMI, and slightly lower albumin
+        reflect a population at increased colorectal cancer risk but
+        without a current diagnosis.
+
+        Args:
+            n (int): Number of patients to generate.
+
+        Returns:
+            pd.DataFrame: DataFrame with ``n`` rows and all feature
+                columns.
         """
         smoked = self.rng.binomial(1, 0.55, n)
         pack_years = smoked * self.rng.exponential(8.0, n)
@@ -129,10 +172,19 @@ class SyntheticPatientGenerator:
 
     def _healthy_with_altered_values(self, n):
         """
-        Generate patients with altered values.
+        Generate healthy patients with borderline or altered laboratory values.
 
-        :param n: Number of patients with altered values to generate.
-        :return: DataFrame containing generated patients with altered values.
+        Simulates common benign conditions such as mild anaemia, elevated
+        CRP from non-malignant inflammation, and low ferritin from
+        nutritional deficiency. These patients may be misclassified by
+        simple threshold-based rules.
+
+        Args:
+            n (int): Number of patients to generate.
+
+        Returns:
+            pd.DataFrame: DataFrame with ``n`` rows and all feature
+                columns.
         """
         smoked = self.rng.binomial(1, 0.45, n)
         pack_years = smoked * self.rng.exponential(6.0, n)
@@ -163,9 +215,18 @@ class SyntheticPatientGenerator:
 
     def _healthy_tricky(self, n):
         """
-        Generate patients with tricky
-        :param n:
-        :return:
+        Generate healthy patients whose profiles closely resemble early cancer.
+
+        These records intentionally overlap with the cancer distribution
+        to ensure the model cannot rely on simple decision boundaries.
+        All patients remain ``has_cancer = False``.
+
+        Args:
+            n (int): Number of patients to generate.
+
+        Returns:
+            pd.DataFrame: DataFrame with ``n`` rows and all feature
+                columns.
         """
         smoked = self.rng.binomial(1, 0.55, n)
         pack_years = smoked * self.rng.exponential(10.0, n)
@@ -196,7 +257,22 @@ class SyntheticPatientGenerator:
 
     def generate_cancer_patients(self, n: int) -> pd.DataFrame:
         """
-        Generate cancer patients.
+        Generate a stratified cohort of cancer patients.
+
+        The cohort is composed of four sub-groups:
+            - 30%: Early-stage cancer (mild lab deviations).
+            - 35%: Moderate-stage cancer.
+            - 25%: Advanced-stage cancer (pronounced deviations).
+            - 10%: Atypical cancer (young, few risk factors).
+
+        After concatenation, all rows have ``has_cancer = True``.
+
+        Args:
+            n (int): Total number of cancer patients to generate.
+
+        Returns:
+            pd.DataFrame: Shuffled DataFrame with ``n`` rows and all
+                clinical feature columns plus ``has_cancer = True``.
         """
         logger.info(f"Generating {n} cancer patients...")
         n_early = int(n * 0.30)
@@ -217,7 +293,17 @@ class SyntheticPatientGenerator:
 
     def _cancer_early_stage(self, n):
         """
-        Generate early stage cancer patients.
+        Generate early-stage cancer patients with mild lab abnormalities.
+
+        Lab values overlap substantially with healthy ranges, making these
+        records the hardest cases for the classifier.
+
+        Args:
+            n (int): Number of patients to generate.
+
+        Returns:
+            pd.DataFrame: DataFrame with ``n`` rows and all feature
+                columns.
         """
         smoked = self.rng.binomial(1, 0.38, n)
         pack_years = smoked * self.rng.exponential(5.5, n)
@@ -248,7 +334,17 @@ class SyntheticPatientGenerator:
 
     def _cancer_moderate(self, n):
         """
-        Generate moderate stage cancer patients.
+        Generate moderate-stage cancer patients.
+
+        CEA and CA19-9 follow log-normal distributions to capture the
+        right-skewed marker elevations typical at this stage.
+
+        Args:
+            n (int): Number of patients to generate.
+
+        Returns:
+            pd.DataFrame: DataFrame with ``n`` rows and all feature
+                columns.
         """
         smoked = self.rng.binomial(1, 0.48, n)
         pack_years = smoked * self.rng.exponential(7.0, n)
@@ -280,7 +376,17 @@ class SyntheticPatientGenerator:
 
     def _cancer_advanced(self, n):
         """
-        Generate advanced stage cancer patients.
+        Generate advanced-stage cancer patients with pronounced deviations.
+
+        Severe anaemia, hypoalbuminaemia, markedly elevated tumour
+        markers, and high CRP characterise this sub-group.
+
+        Args:
+            n (int): Number of patients to generate.
+
+        Returns:
+            pd.DataFrame: DataFrame with ``n`` rows and all feature
+                columns.
         """
         smoked = self.rng.binomial(1, 0.55, n)
         pack_years = smoked * self.rng.exponential(9.0, n)
@@ -312,7 +418,18 @@ class SyntheticPatientGenerator:
 
     def _cancer_atypical(self, n):
         """
-        Generate atypical stage cancer patients.
+        Generate atypical cancer patients with near-normal lab profiles.
+
+        Represents young patients with few conventional risk factors and
+        lab values close to the healthy range, simulating hereditary or
+        Lynch syndrome-related cancers.
+
+        Args:
+            n (int): Number of patients to generate.
+
+        Returns:
+            pd.DataFrame: DataFrame with ``n`` rows and all feature
+                columns.
         """
         smoked = self.rng.binomial(1, 0.22, n)
         pack_years = smoked * self.rng.exponential(3.0, n)
@@ -343,7 +460,22 @@ class SyntheticPatientGenerator:
 
     def _healthy_categorical(self, n, risk_level):
         """
-        Generate categorical features for healthy patients.
+        Sample categorical lifestyle features for healthy patients.
+
+        Probabilities for gender, ethnicity, smoking status, alcohol
+        consumption, physical activity, and diet type are drawn from
+        risk-level-specific distributions (``"low"``, ``"medium"``, or
+        ``"high"``). Higher risk levels shift distributions towards
+        sedentary behaviour, heavy smoking, and poor diet.
+
+        Args:
+            n (int): Number of samples.
+            risk_level (str): One of ``"low"``, ``"medium"``, or
+                ``"high"``.
+
+        Returns:
+            dict[str, np.ndarray]: Dictionary mapping feature names to
+                arrays of sampled categorical values, each of length ``n``.
         """
         configs = {
             "low": {
@@ -412,7 +544,21 @@ class SyntheticPatientGenerator:
 
     def _cancer_categorical(self, n, severity):
         """
-        Generate categorical features for cancer patients.
+        Sample categorical lifestyle features for cancer patients.
+
+        Mirrors ``_healthy_categorical`` but uses severity-specific
+        distributions (``"low"``, ``"medium"``, or ``"high"``) that
+        shift incrementally towards higher-risk profiles as severity
+        increases.
+
+        Args:
+            n (int): Number of samples.
+            severity (str): One of ``"low"``, ``"medium"``, or
+                ``"high"``.
+
+        Returns:
+            dict[str, np.ndarray]: Dictionary mapping feature names to
+                arrays of sampled categorical values, each of length ``n``.
         """
         configs = {
             "low": {
@@ -481,7 +627,21 @@ class SyntheticPatientGenerator:
 
     def _healthy_binary(self, n, risk_level):
         """
-        Generate binary features for healthy patients.
+        Sample binary clinical risk indicators for healthy patients.
+
+        Probabilities cover family history, comorbidities (IBD, T2DM),
+        prior polyp or cancer history, and stool-based screening test
+        results. All probabilities increase progressively from ``"low"``
+        to ``"high"`` risk level.
+
+        Args:
+            n (int): Number of samples.
+            risk_level (str): One of ``"low"``, ``"medium"``, or
+                ``"high"``.
+
+        Returns:
+            dict[str, np.ndarray]: Dictionary mapping binary feature names
+                to boolean arrays of length ``n``.
         """
         probs = {
             "low": {
@@ -526,7 +686,20 @@ class SyntheticPatientGenerator:
 
     def _cancer_binary(self, n, severity):
         """
-        Generate binary features for cancer patients.
+        Sample binary clinical risk indicators for cancer patients.
+
+        Same features as ``_healthy_binary`` but with higher base
+        probabilities and a much higher rate of positive screening tests
+        (FOBT, FIT) to reflect the malignant phenotype.
+
+        Args:
+            n (int): Number of samples.
+            severity (str): One of ``"low"``, ``"medium"``, or
+                ``"high"``.
+
+        Returns:
+            dict[str, np.ndarray]: Dictionary mapping binary feature names
+                to boolean arrays of length ``n``.
         """
         probs = {
             "low": {
@@ -570,7 +743,20 @@ class SyntheticPatientGenerator:
         return {k: self.rng.binomial(1, v, n).astype(bool) for k, v in p.items()}
 
     def _clip_physiological(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clips all columns to physiological ranges using centralized constants."""
+        """
+        Clip all feature columns to their valid physiological ranges.
+
+        Ranges are defined in ``PHYSIOLOGICAL_RANGES`` from
+        ``src.config.constants``. Columns not present in the constant
+        are left unchanged.
+
+        Args:
+            df (pd.DataFrame): DataFrame to clip in place.
+
+        Returns:
+            pd.DataFrame: DataFrame with all covered columns clipped to
+                ``[lo, hi]`` as defined by ``PHYSIOLOGICAL_RANGES``.
+        """
         for col, (lo, hi) in PHYSIOLOGICAL_RANGES.items():
             if col in df.columns:
                 df[col] = df[col].clip(lo, hi)
@@ -578,7 +764,25 @@ class SyntheticPatientGenerator:
 
     def _add_correlations(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Adds correlations between physiological features.
+        Introduce physiologically motivated correlations between features.
+
+        Adjustments applied:
+            - Haematocrit, serum iron, and ferritin co-vary with
+              haemoglobin (positive correlation).
+            - WBC count and platelet count co-vary with CRP (positive
+              correlation reflecting systemic inflammation).
+            - BMI co-varies with albumin (slight positive correlation).
+
+        All adjustments include additive Gaussian noise to avoid perfect
+        linear relationships. Results are clipped to physiological ranges
+        via ``_clip_physiological``.
+
+        Args:
+            df (pd.DataFrame): DataFrame of generated patient records.
+
+        Returns:
+            pd.DataFrame: Copy of ``df`` with correlated adjustments
+                applied and values clipped.
         """
         df = df.copy()
         n = len(df)
@@ -601,7 +805,20 @@ class SyntheticPatientGenerator:
 
     def _add_measurement_noise(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Adds measurement noise to physiological features.
+        Simulate analytical measurement variability in laboratory results.
+
+        Multiplies each feature by a factor drawn from
+        ``Normal(1.0, CV)`` where ``CV`` is the per-feature coefficient
+        of variation defined in the method body. Age is left unchanged
+        (CV = 0). Results are clipped to physiological ranges.
+
+        Args:
+            df (pd.DataFrame): DataFrame of patient records after
+                correlation adjustment.
+
+        Returns:
+            pd.DataFrame: Copy of ``df`` with multiplicative noise
+                applied to each covered feature and values re-clipped.
         """
         df = df.copy()
         n = len(df)
@@ -627,7 +844,21 @@ class SyntheticPatientGenerator:
 
     def generate_balanced_dataset(self, n_per_class: int = 5000) -> pd.DataFrame:
         """
-        Generate a balanced dataset of healthy and cancer patients.
+        Generate a balanced dataset with equal numbers of healthy and cancer patients.
+
+        Calls ``generate_healthy_patients`` and ``generate_cancer_patients``
+        independently, concatenates the results, shuffles the combined
+        DataFrame, applies correlation adjustments and measurement noise,
+        and runs ``_verify_overlap`` to log distributional statistics.
+
+        Args:
+            n_per_class (int): Number of patients per class. The resulting
+                dataset will have ``2 * n_per_class`` rows in total.
+                Default is 5000.
+
+        Returns:
+            pd.DataFrame: Fully processed, shuffled DataFrame with
+                ``2 * n_per_class`` rows and a reset integer index.
         """
         logger.info(
             f"Generating balanced dataset with {n_per_class} patients per class..."
@@ -644,7 +875,17 @@ class SyntheticPatientGenerator:
 
     def generate_healthy_patients_standalone(self, n):
         """
-        Generate healthy patients.
+        Generate healthy patients and apply correlation and noise post-processing.
+
+        Convenience wrapper that combines ``generate_healthy_patients``,
+        ``_add_correlations``, and ``_add_measurement_noise`` in a single
+        call, suitable for use in multimodal linking workflows.
+
+        Args:
+            n (int): Number of healthy patients to generate.
+
+        Returns:
+            pd.DataFrame: Processed healthy patient DataFrame.
         """
         df = self.generate_healthy_patients(n)
         df = self._add_correlations(df)
@@ -652,7 +893,17 @@ class SyntheticPatientGenerator:
 
     def generate_cancer_patients_standalone(self, n):
         """
-        Generate cancer patients.
+        Generate cancer patients and apply correlation and noise post-processing.
+
+        Convenience wrapper that combines ``generate_cancer_patients``,
+        ``_add_correlations``, and ``_add_measurement_noise`` in a single
+        call, suitable for use in multimodal linking workflows.
+
+        Args:
+            n (int): Number of cancer patients to generate.
+
+        Returns:
+            pd.DataFrame: Processed cancer patient DataFrame.
         """
         df = self.generate_cancer_patients(n)
         df = self._add_correlations(df)
@@ -660,7 +911,19 @@ class SyntheticPatientGenerator:
 
     def _verify_overlap(self, df):
         """
-        Verify overlap between healthy and cancer patients.
+        Log Cohen's d effect sizes and binary feature gap statistics.
+
+        For each continuous feature, computes Cohen's d between the
+        healthy and cancer groups and labels the effect size as Low
+        (d < 0.5), Medium (< 0.8), High (< 1.2), or Very High (≥ 1.2).
+        For binary features, logs the positive rate per group and the
+        absolute gap. This provides a quick sanity check that the
+        generated dataset has realistic overlap rather than trivially
+        separable classes.
+
+        Args:
+            df (pd.DataFrame): Combined healthy + cancer DataFrame with
+                the ``has_cancer`` column.
         """
         cancer = df[df["has_cancer"]]
         healthy = df[~df["has_cancer"]]
@@ -691,7 +954,9 @@ class SyntheticPatientGenerator:
                 else "🔴 VERY High"
             )
             logger.info(
-                f"  {feat:>22s}: healthy={h_mean:.1f}±{h_std:.1f} | cancer={c_mean:.1f}±{c_std:.1f} | d={cohens_d:.2f} {status}"
+                f"  {feat:>22s}: healthy={h_mean:.1f}±{h_std:.1f} | "
+                f"cancer={c_mean:.1f}±{c_std:.1f} | "
+                f"d={cohens_d:.2f} {status}"
             )
         for feat in ["fobt_positive", "fit_positive", "previous_polyps"]:
             if feat not in df.columns:
@@ -701,19 +966,52 @@ class SyntheticPatientGenerator:
             gap = abs(c_rate - h_rate)
             status = "✅" if gap < 0.30 else "⚠️" if gap < 0.45 else "🔴"
             logger.info(
-                f"  {feat:>22s}: healthy={h_rate:.1%} | cancer={c_rate:.1%} | gap={gap:.1%} {status}"
+                f"  {feat:>22s}: healthy={h_rate:.1%} | "
+                f"cancer={c_rate:.1%} | gap={gap:.1%} {status}"
             )
 
 
 class SyntheticMultimodalLinker:
     """
-    Links medical images with tabular patient data.
+    Links colonoscopy image paths with synthetic tabular patient profiles.
+
+    Assigns a generated healthy or cancer patient profile to each image
+    based on its label, creating a paired multimodal dataset for
+    training or evaluation purposes.
     """
 
     def __init__(self, generator: SyntheticPatientGenerator):
+        """
+        Initialise the linker with a configured patient generator.
+
+        Args:
+            generator (SyntheticPatientGenerator): Pre-initialised
+                generator instance used to produce healthy and cancer
+                patient profiles.
+        """
         self.generator = generator
 
     def link_images_with_tabular(self, image_paths, image_labels):
+        """
+        Pair each image path with a synthetic patient profile.
+
+        Generates one healthy profile per normal image and one cancer
+        profile per polyp image, then assembles a flat DataFrame with
+        one row per image containing both the tabular features and the
+        image metadata.
+
+        Args:
+            image_paths (list[str]): Ordered list of absolute image file
+                paths.
+            image_labels (list[int]): Ordered list of integer labels
+                aligned with ``image_paths``. Label 1 is treated as
+                polyp/cancer; label 0 as normal/healthy.
+
+        Returns:
+            pd.DataFrame: DataFrame with one row per image, containing
+                all generated tabular features plus ``image_path`` and
+                ``image_label`` columns.
+        """
         n = len(image_paths)
         polyp_mask = np.array(image_labels) == 1
         n_polyp = int(polyp_mask.sum())
@@ -734,6 +1032,7 @@ class SyntheticMultimodalLinker:
             rows.append(row)
         result = pd.DataFrame(rows)
         logger.info(
-            f"✅ Linked {n} images with tabular profiles ({n_normal} normal, {n_polyp} polyps)"
+            f"✅ Linked {n} images with tabular profiles "
+            f"({n_normal} normal, {n_polyp} polyps)"
         )
         return result

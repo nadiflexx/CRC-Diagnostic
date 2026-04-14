@@ -1,17 +1,18 @@
 """
 src/training/train_image_segmenter.py
 
-Entrenamiento del segmentador de pólipos (U-Net).
-Localiza la posición exacta del pólipo en la imagen.
+Training pipeline for the polyp segmenter (U-Net).
+Locates the exact position of a polyp within a colonoscopy image.
 
-Solo entrena con imágenes que tienen máscara (Kvasir-SEG subset).
+Only trains on images that have an associated ground-truth mask
+(Kvasir-SEG subset and CVC-ClinicDB).
 
-Métricas:
-  - Dice coefficient (solapamiento global)
-  - IoU / Jaccard (intersection over union)
-  - Pixel accuracy
+Metrics:
+    - Dice coefficient (global overlap).
+    - IoU / Jaccard (intersection over union).
+    - Pixel accuracy.
 
-Con MLflow tracking.
+Includes MLflow experiment tracking.
 """
 
 from pathlib import Path
@@ -38,9 +39,21 @@ from src.training.tracking import MLflowTracker
 
 
 class ImageSegmenterTrainer:
-    """Pipeline de entrenamiento del segmentador U-Net."""
+    """
+    Training orchestrator for the U-Net polyp segmentation model.
+
+    Manages data loading, dataset construction, training loop with early
+    stopping, checkpoint saving, and MLflow tracking.
+    """
 
     def __init__(self, device: str | None = None):
+        """
+        Initialise the segmentation trainer.
+
+        Args:
+            device (str | None): Target device. If ``None``, CUDA is used
+                when available, otherwise CPU.
+        """
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = ColonPolypSegmenter().to(self.device)
         self.tracker = MLflowTracker(experiment_name="Colon_Cancer_Polyp_Segmentation")
@@ -57,8 +70,21 @@ class ImageSegmenterTrainer:
 
     def _load_segmentation_data(self):
         """
-        Carga imágenes con máscara para segmentación.
-        Incluye HyperKvasir Y CVC-ClinicDB (ambas tienen ground truth).
+        Load images that have an associated ground-truth mask from the database.
+
+        Queries all splits (train, val, test) and retains only the records
+        for which a mask file exists on disk. Supports both HyperKvasir and
+        CVC-ClinicDB sources. The resulting collection is then split 80/20
+        for training and validation.
+
+        Returns:
+            dict: Dictionary with keys ``"train"`` and ``"val"``. Each value
+                is a tuple ``(paths, labels, mask_paths)`` where every element
+                is a ``list[str]``.
+
+        Raises:
+            RuntimeError: If no images with a valid mask are found in the
+                database after filtering.
         """
         with get_db() as db:
             repo = TrainingImageRepository(db)
@@ -69,7 +95,6 @@ class ImageSegmenterTrainer:
                 + repo.get_by_split("test")
             )
 
-            # Filtrar: solo los que tienen máscara
             seg_data = []
             for d in all_data:
                 file_path = str(d.file_path)
@@ -87,13 +112,12 @@ class ImageSegmenterTrainer:
 
         if not seg_data:
             raise RuntimeError(
-                "No se encontraron imágenes con máscara.\n"
-                "Ejecuta:\n"
+                "No images with masks found.\n"
+                "Run:\n"
                 "  1. python -m src.data_processing.preprocess_masks\n"
                 "  2. python -m src.data_ingestion.organize_multi_dataset"
             )
 
-        # Log por fuente
         from collections import Counter
 
         sources = Counter()
@@ -106,9 +130,8 @@ class ImageSegmenterTrainer:
             else:
                 sources["other"] += 1
 
-        logger.info(f"  Imágenes con máscara: {len(seg_data)} ({dict(sources)})")
+        logger.info(f"  Images with masks: {len(seg_data)} ({dict(sources)})")
 
-        # Split para segmentación
         train_data, val_data = train_test_split(
             seg_data, test_size=0.2, random_state=42
         )
@@ -130,7 +153,22 @@ class ImageSegmenterTrainer:
         batch_size: int = 8,
         lr: float = 1e-4,
     ):
-        """Pipeline completo con MLflow."""
+        """
+        Run the full U-Net training pipeline with MLflow tracking.
+
+        Steps:
+            1. Start an MLflow run and log hyperparameters.
+            2. Load segmentation data from the database.
+            3. Build ``ColonoscopyDataset`` instances for train and val.
+            4. Instantiate DiceBCE loss, AdamW optimiser, and cosine scheduler.
+            5. Execute the training loop with early stopping based on Dice.
+            6. Save the best checkpoint and log it to MLflow.
+
+        Args:
+            epochs (int): Maximum number of training epochs. Default is 50.
+            batch_size (int): Number of samples per batch. Default is 8.
+            lr (float): Initial learning rate for AdamW. Default is 1e-4.
+        """
         image_size = model_cfg.IMAGE_SIZE
 
         with self.tracker.start_run("unet_efficientb4_segmentation"):
@@ -148,8 +186,7 @@ class ImageSegmenterTrainer:
                 }
             )
 
-            # ── Datos ──
-            logger.info("\n═══ CARGANDO DATOS DE SEGMENTACIÓN ═══")
+            logger.info("\n═══ LOADING SEGMENTATION DATA ═══")
             data = self._load_segmentation_data()
             train_paths, train_labels, train_masks = data["train"]
             val_paths, val_labels, val_masks = data["val"]
@@ -161,7 +198,6 @@ class ImageSegmenterTrainer:
                 }
             )
 
-            # ── Datasets ──
             train_dataset = ColonoscopyDataset(
                 train_paths,
                 train_labels,
@@ -196,7 +232,6 @@ class ImageSegmenterTrainer:
             )
             logger.info(f"  Val:   {len(val_dataset)} imgs, {len(val_loader)} batches")
 
-            # ── Loss, Optimizer, Scheduler ──
             criterion = DiceBCELoss(dice_weight=0.6, bce_weight=0.4)
             optimizer = torch.optim.AdamW(
                 self.model.parameters(), lr=lr, weight_decay=1e-4
@@ -205,14 +240,12 @@ class ImageSegmenterTrainer:
                 optimizer, T_0=10, T_mult=2
             )
 
-            # ── Training loop ──
-            logger.info("\n═══ ENTRENAMIENTO: SEGMENTADOR DE PÓLIPOS ═══")
+            logger.info("\n═══ TRAINING: POLYP SEGMENTER ═══")
             logger.info(f"  Epochs: {epochs} | Batch: {batch_size} | LR: {lr}")
             logger.info(f"  Device: {self.device}")
             logger.info("  Loss: DiceBCE (dice=0.6, bce=0.4)")
 
             for epoch in range(epochs):
-                # ── TRAIN ──
                 self.model.train()
                 train_loss = 0.0
                 batch_count = 0
@@ -242,22 +275,19 @@ class ImageSegmenterTrainer:
                         train_pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
                     except Exception as e:
-                        logger.error(f"Error batch: {e}")
+                        logger.error(f"Batch error: {e}")
                         continue
 
                 scheduler.step()
                 avg_train_loss = train_loss / max(batch_count, 1)
 
-                # ── VALIDATE ──
                 val_metrics = self._validate(val_loader, criterion)
 
-                # ── History ──
                 self.history["train_loss"].append(avg_train_loss)
                 self.history["val_loss"].append(val_metrics["loss"])
                 self.history["val_dice"].append(val_metrics["dice"])
                 self.history["val_iou"].append(val_metrics["iou"])
 
-                # ── MLflow ──
                 current_lr = optimizer.param_groups[0]["lr"]
                 self.tracker.log_metrics(
                     {
@@ -271,14 +301,13 @@ class ImageSegmenterTrainer:
                     step=epoch,
                 )
 
-                # ── Early stopping ──
                 if val_metrics["dice"] > self.best_dice:
                     self.best_dice = val_metrics["dice"]
                     self.best_iou = val_metrics["iou"]
                     self.patience_counter = 0
                     self._save_checkpoint(epoch, val_metrics)
                     logger.info(
-                        f"  ✅ Mejor: Dice={self.best_dice:.4f} IoU={self.best_iou:.4f}"
+                        f"  ✅ Best: Dice={self.best_dice:.4f} IoU={self.best_iou:.4f}"
                     )
                 else:
                     self.patience_counter += 1
@@ -294,11 +323,10 @@ class ImageSegmenterTrainer:
                 )
 
                 if self.patience_counter >= self.max_patience:
-                    logger.info(f"⚠️  Early stopping epoch {epoch + 1}")
+                    logger.info(f"⚠️  Early stopping at epoch {epoch + 1}")
                     self.tracker.log_param("seg_early_stopped_epoch", epoch + 1)
                     break
 
-            # ── Log mejores métricas ──
             self.tracker.log_metrics(
                 {
                     "seg_best_dice": self.best_dice,
@@ -308,23 +336,41 @@ class ImageSegmenterTrainer:
             )
 
             logger.info(
-                f"\n✅ Segmentador entrenado. "
-                f"Mejor Dice: {self.best_dice:.4f} | "
+                f"\n✅ Segmenter trained. "
+                f"Best Dice: {self.best_dice:.4f} | "
                 f"IoU: {self.best_iou:.4f}"
             )
 
-            # Log modelo
             self.tracker.log_model(self.model, "polyp_segmenter")
-            logger.info("  📦 Modelo logueado en MLflow")
+            logger.info("  📦 Model logged to MLflow")
 
     def _validate(self, loader, criterion):
         """
-        Validación con métricas de segmentación estándar.
+        Compute segmentation metrics on the validation set.
 
-        Métricas (todas por muestra, luego promediadas):
-          - Dice: 2|A∩B| / (|A|+|B|)
-          - IoU:  |A∩B| / |A∪B|
-          - Pixel Accuracy: pixels correctos / total pixels
+        For each sample the Dice coefficient, IoU (Jaccard index), and pixel
+        accuracy are computed individually and then averaged across the full
+        loader. Binary predictions are obtained by thresholding sigmoid
+        outputs at 0.5.
+
+        Formulas applied per sample (with smoothing factor ``smooth=1.0``):
+            - Dice  = (2 * |A ∩ B| + smooth) / (|A| + |B| + smooth)
+            - IoU   = (|A ∩ B| + smooth) / (|A ∪ B| + smooth)
+            - Pixel accuracy = correct_pixels / total_pixels
+
+        Args:
+            loader (DataLoader): Validation data loader yielding
+                ``(images, masks)`` batches.
+            criterion (torch.nn.Module): Loss function used to accumulate
+                the reported validation loss.
+
+        Returns:
+            dict: Dictionary with the following keys:
+                - ``"loss"`` (float): Average batch loss.
+                - ``"dice"`` (float): Mean Dice coefficient over all samples.
+                - ``"iou"`` (float): Mean IoU over all samples.
+                - ``"pixel_acc"`` (float): Mean pixel accuracy over all
+                  samples.
         """
         self.model.eval()
         val_loss = 0.0
@@ -342,11 +388,9 @@ class ImageSegmenterTrainer:
                 loss = criterion(outputs, masks)
                 val_loss += loss.item()
 
-                # Predicción binaria
                 probs = torch.sigmoid(outputs)
                 preds = (probs > 0.5).float()
 
-                # Métricas por muestra
                 for i in range(preds.shape[0]):
                     pred_flat = preds[i].view(-1)
                     mask_flat = masks[i].view(-1)
@@ -356,17 +400,14 @@ class ImageSegmenterTrainer:
                     mask_sum = mask_flat.sum().item()
                     union = pred_sum + mask_sum - intersection
 
-                    # Dice
                     dice = (2.0 * intersection + smooth) / (
                         pred_sum + mask_sum + smooth
                     )
                     dice_scores.append(dice)
 
-                    # IoU (Jaccard)
                     iou = (intersection + smooth) / (union + smooth)
                     iou_scores.append(iou)
 
-                    # Pixel accuracy
                     correct = (pred_flat == mask_flat).sum().item()
                     total = mask_flat.numel()
                     pixel_accs.append(correct / total)
@@ -379,6 +420,14 @@ class ImageSegmenterTrainer:
         }
 
     def _save_checkpoint(self, epoch, metrics):
+        """
+        Save the current model state as the best segmentation checkpoint.
+
+        Args:
+            epoch (int): Zero-based epoch index of the current checkpoint.
+            metrics (dict): Validation metrics dictionary as returned by
+                ``_validate``.
+        """
         path = paths.SEGMENTER_CHECKPOINT
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(
@@ -394,14 +443,20 @@ class ImageSegmenterTrainer:
         )
 
     def load_best(self):
+        """
+        Restore model weights from the best saved segmentation checkpoint.
+
+        Logs a warning if no checkpoint file is found at
+        ``paths.SEGMENTER_CHECKPOINT``.
+        """
         path = paths.SEGMENTER_CHECKPOINT
         if not path.exists():
-            logger.warning("No se encontró checkpoint del segmentador")
+            logger.warning("No segmenter checkpoint found.")
             return
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(ckpt["model_state_dict"])
         logger.info(
-            f"✅ Segmentador cargado: "
+            f"✅ Segmenter loaded: "
             f"Dice={ckpt.get('best_dice', 0):.4f} "
             f"IoU={ckpt.get('best_iou', 0):.4f}"
         )
@@ -409,8 +464,8 @@ class ImageSegmenterTrainer:
 
 if __name__ == "__main__":
     logger.info("=" * 70)
-    logger.info("SEGMENTADOR DE PÓLIPOS (U-Net)")
-    logger.info("  Localización exacta de pólipos en colonoscopia")
+    logger.info("POLYP SEGMENTER (U-Net)")
+    logger.info("  Exact polyp localisation in colonoscopy images")
     logger.info("=" * 70)
 
     trainer = ImageSegmenterTrainer(
