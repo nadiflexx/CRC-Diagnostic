@@ -9,6 +9,8 @@ from pathlib import Path
 import random
 import shutil
 
+import pandas as pd
+import numpy as np
 from PIL import Image
 from sklearn.model_selection import train_test_split
 from sqlalchemy import inspect as sa_inspect
@@ -22,12 +24,20 @@ from src.config.constants import (
     NUM_CLASSES,
     POLYP_KEYWORDS,
     SOURCE_MAP,
+    TABULAR_COLON_FEATURES,
+    TABULAR_COLON_TARGET,
+    TABULAR_COLON_COLUMNS_TO_DROP,
+    TABULAR_COLON_BINARY_MAP,
+    TABULAR_COLON_DIET_RISK_MAP,
+    TABULAR_COLON_ACTIVITY_MAP,
+    TABULAR_COLON_BMI_MAP,
     detect_source_from_stem,
 )
 from src.config.logger import log as logger
 from src.config.paths import paths
 from src.data.processing.standardizer import process_dataset as preprocess
 from src.data.processing.tissue_only_preprocessor import process_dataset_tissue_only
+from src.data.processing.reverse_logic_processor import ReverseLogicDataAnalyzer
 from src.database.connection import engine, get_db
 from src.database.models import Base, TrainingImage
 from src.database.repositories import TrainingImageRepository
@@ -85,8 +95,273 @@ class MultiDatasetOrganizer:
         self._register_in_database()
         self._verify_source_mixing()
         self._start_tissue_preprocessor()
+        self._process_tabular_dataset()
 
         logger.info("\n✅ MULTI-SOURCE ORGANIZATION COMPLETED")
+
+    # ═══════════════════════════════════════════════════════════
+    #  TABULAR DATA PROCESSING METHODS
+    # ═══════════════════════════════════════════════════════════
+
+    def _process_tabular_dataset(self):
+        """
+        Pipeline completo para cargar, limpiar, validar y guardar datos tabulares.
+        """
+        logger.info("\n═══ Phase 10: Tabular Data Processing ═══")
+        input_path = paths.RAW_TABULAR / "colorectal_cancer_dataset.csv"
+        output_path = paths.PROCESSED_TABULAR / "colorectal_cancer_cleaned.csv"
+        input_path_alk_smk = paths.RAW_TABULAR / "smoking_drinking_dataset_Ver01.csv"
+        output_path_alk_smk = paths.PROCESSED_TABULAR / "smoking_drinking_cleaned.csv"
+        
+        try:
+            df = self._load_colorectal_cancer_csv(input_path)
+            df_clean = self._clean_colorectal_dataset(df)
+            df_alk_smk = self._load_dataset_smoking_drinking(input_path_alk_smk)
+            df_clean_alk_smk = self._clean_smoking_drinking_dataset(df_alk_smk)
+
+            if df_clean is not None:
+                is_valid = self._validate_colorectal_data(df_clean)
+                if is_valid:
+                    self._save_cleaned_dataset(df_clean, output_path)
+                else:
+                    logger.error("  ❌ Tabular dataset validation failed. File will not be saved.")
+            else:
+                logger.error("  ❌ Cleaning process returned None.")
+            
+            if df_clean_alk_smk is not None:
+                is_valid = self._validate_smoking_drinking_data(df_clean_alk_smk)
+                if is_valid:
+                    self._save_cleaned_smoking_drinking_dataset(df_clean_alk_smk, output_path_alk_smk)
+                else:
+                    logger.error("  ❌ Tabular smoking/drinking dataset validation failed. File will not be saved.")
+            else:
+                logger.error("  ❌ Cleaning process returned None.")
+        except Exception as e:
+            logger.error(f"  ❌ Error during tabular processing: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+
+    def _load_colorectal_cancer_csv(self, filepath: Path) -> pd.DataFrame:
+        if not filepath.exists():
+            raise FileNotFoundError(f"File not found: {filepath}")
+        
+        logger.info(f"  [LOAD] Loading dataset from: {filepath}")
+        df = pd.read_csv(filepath)
+        logger.info(f"  [LOAD] Records: {len(df):,}")
+        logger.info(f"  [LOAD] Columns: {df.shape[1]}")
+        return df
+
+    def _clean_colorectal_dataset(self, df: pd.DataFrame) -> pd.DataFrame:
+        logger.info("  [CLEAN] Starting data cleaning...")
+        df_clean = df.copy()
+        
+        # 0: Estandarizar nombres de columnas (eliminar espacios y normalizar)
+        df_clean.columns = df_clean.columns.str.strip()
+        
+        # 1: IDENTIFICAR Y RENOMBRAR TARGET (Antes de descartar columnas)
+        # Añadimos Survival_Prediction y Survival_5_years como alias comunes
+        target_aliases = [
+            'Survival_Prediction', 'Survival_5_years', 'Diagnosis', 
+            'has_cancer', 'diagnosis', 'Target', 'Class', 'label'
+        ]
+        
+        target_found = False
+        if TABULAR_COLON_TARGET not in df_clean.columns:
+            for alias in target_aliases:
+                match = [c for c in df_clean.columns if c.lower() == alias.lower()]
+                if match:
+                    df_clean = df_clean.rename(columns={match[0]: TABULAR_COLON_TARGET})
+                    logger.info(f"  [CLEAN] Identified target: '{match[0]}' -> '{TABULAR_COLON_TARGET}'")
+                    target_found = True
+                    break
+        else:
+            target_found = True
+
+        if not target_found:
+            logger.error(f"  [CLEAN] Target not found. Available: {df_clean.columns.tolist()[:5]}...")
+            return None
+        
+        # 2: Drop leakage columns (Asegurándonos de no borrar el target ya renombrado)
+        # Filtramos la lista de drop para que no elimine el nuevo nombre del target ni el país si es feature
+        cols_to_drop = [
+            col for col in TABULAR_COLON_COLUMNS_TO_DROP 
+            if col in df_clean.columns and col != TABULAR_COLON_TARGET and col != 'Country'
+        ]
+        df_clean = df_clean.drop(columns=cols_to_drop)
+        logger.info(f"  [CLEAN] Dropped {len(cols_to_drop)} leakage columns.")
+        
+        # 3: Manejo de duplicados y nulos
+        df_clean = df_clean.drop_duplicates()
+        critical_features = [col for col in TABULAR_COLON_FEATURES if col in df_clean.columns]
+        df_clean = df_clean.dropna(subset=critical_features, how='any')
+        
+        # 4: Codificación de variables (Mapeos desde constants.py)
+        logger.info("  [CLEAN] Encoding variables...")
+        
+        # Mapeos Binarios (Yes/No -> 1/0)
+        binary_cols = [
+            'Family_History', 'Smoking_History', 'Alcohol_Consumption', 
+            'Diabetes', 'Inflammatory_Bowel_Disease', 'Genetic_Mutation',
+            TABULAR_COLON_TARGET  # Survival_Prediction también es Yes/No
+        ]
+        
+        for col in binary_cols:
+            if col in df_clean.columns:
+                df_clean[col] = df_clean[col].map(TABULAR_COLON_BINARY_MAP)
+        
+        # Mapeos categóricos ordinales
+        if 'Diet_Risk' in df_clean.columns:
+            df_clean['Diet_Risk'] = df_clean['Diet_Risk'].map(TABULAR_COLON_DIET_RISK_MAP)
+        if 'Physical_Activity' in df_clean.columns:
+            df_clean['Physical_Activity'] = df_clean['Physical_Activity'].map(TABULAR_COLON_ACTIVITY_MAP)
+        if 'Gender' in df_clean.columns:
+            df_clean['Gender'] = df_clean['Gender'].map({'M': 0, 'F': 1, 'Male': 0, 'Female': 1})
+        if 'Urban_or_Rural' in df_clean.columns:
+            df_clean['Urban_or_Rural'] = df_clean['Urban_or_Rural'].map({'Urban': 1, 'Rural': 0})
+            
+        # BMI (One-hot encoding)
+        if 'Obesity_BMI' in df_clean.columns:
+            bmi_dummies = pd.get_dummies(df_clean['Obesity_BMI'], prefix='BMI')
+            df_clean = pd.concat([df_clean, bmi_dummies], axis=1).drop(columns=['Obesity_BMI'])
+            
+        # Country (One-hot encoding - Solo si se mantuvo)
+        if 'Country' in df_clean.columns:
+            country_dummies = pd.get_dummies(df_clean['Country'], prefix='Country', drop_first=True)
+            df_clean = pd.concat([df_clean, country_dummies], axis=1).drop(columns=['Country'])
+        
+        # 5: Asegurar tipos numéricos
+        for col in df_clean.columns:
+            df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+        
+        # Rellenar nulos finales con 0 o promedios si quedaron tras el coerce
+        df_clean = df_clean.fillna(0)
+        
+        return df_clean
+
+    def _validate_colorectal_data(self, df: pd.DataFrame) -> bool:
+        logger.info("  [VALIDATE] Running checks...")
+        
+        # 1. Verificar Target
+        if TABULAR_COLON_TARGET not in df.columns:
+            logger.error(f"  [VALIDATE] ✗ Target '{TABULAR_COLON_TARGET}' missing.")
+            return False
+            
+        # 2. Verificar balance de clases
+        counts = df[TABULAR_COLON_TARGET].value_counts()
+        logger.info(f"  [VALIDATE] Class distribution: {counts.to_dict()}")
+        
+        # 3. Verificar Features (considerando las que cambiaron de nombre)
+        # Country y Obesity_BMI cambian de nombre por el get_dummies
+        expected_missing = ['Obesity_BMI', 'Country']
+        missing = [c for c in TABULAR_COLON_FEATURES if c not in df.columns and c not in expected_missing]
+        
+        if missing:
+            logger.warning(f"  [VALIDATE] Missing original features: {missing}")
+        
+        logger.info(f"  [VALIDATE] ✓ Dataset ready ({df.shape[0]} rows, {df.shape[1]} cols)")
+        return True
+
+    def _save_cleaned_dataset(self, df: pd.DataFrame, filepath: Path):
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(filepath, index=False)
+        logger.info(f"  [SAVE] Cleaned dataset saved to: {filepath}")
+    
+    # Alcohol & Smoking dataset cleaning data and analysis data values
+    def _load_dataset_smoking_drinking(self, filepath: Path) -> pd.DataFrame:
+        """Load the alcohol & smoking dataset."""
+        if not filepath.exists():
+            raise FileNotFoundError(f"File not found: {filepath}")
+        
+        logger.info(f"  [LOAD] Loading dataset from: {filepath}")
+        df = pd.read_csv(filepath)
+        logger.info(f"  [LOAD] Records: {len(df):,}")
+        logger.info(f"  [LOAD] Columns: {df.shape[1]}")
+        return df
+    
+    def _clean_smoking_drinking_dataset(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Clean the alcohol & smoking dataset ensuring correct types and no missing data.
+        """
+        logger.info("  [CLEAN] Starting cleaning of alcohol & smoking dataset...")
+        df_clean = df.copy()
+        
+        df_clean.columns = df_clean.columns.str.strip()
+        df_clean = df_clean.drop_duplicates()
+        df_clean = df_clean.dropna()
+        numeric_cols = [
+            "height", "weight", "waistline", "SBP", "DBP", "BLDS", "tot_chole", "HDL_chole",
+            "LDL_chole", "triglyceride", "hemoglobin", "urine_protein", "serum_creatinine",
+            "SGOT_AST", "SGOT_ALT", "gamma_GTP", "SMK_stat_type_cd"
+        ]
+        
+        for col in numeric_cols:
+            if col in df_clean.columns:
+                df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+
+        # Derived features to enrich reverse-logic models
+        if {"weight", "height"}.issubset(df_clean.columns):
+            valid_height = df_clean["height"].replace(0, np.nan)
+            df_clean["BMI"] = df_clean["weight"] / ((valid_height / 100.0) ** 2)
+
+        if {"SGOT_AST", "SGOT_ALT"}.issubset(df_clean.columns):
+            valid_alt = df_clean["SGOT_ALT"].replace(0, np.nan)
+            df_clean["AST_ALT_ratio"] = df_clean["SGOT_AST"] / valid_alt
+            
+        if 'sex' in df_clean.columns:
+            df_clean['sex'] = df_clean['sex'].str.strip().str.capitalize()
+            
+        if 'DRK_YN' in df_clean.columns:
+            df_clean['DRK_YN'] = df_clean['DRK_YN'].str.strip().str.upper()
+
+        if 'SMK_stat_type_cd' in df_clean.columns:
+            df_clean['SMK_stat_type_cd'] = df_clean['SMK_stat_type_cd'].apply(
+                lambda x: "No" if x == 1.0 else "Yes"
+            )
+
+        if 'DRK_YN' in df_clean.columns:
+            df_clean['DRK_YN'] = df_clean['DRK_YN'].map({"Y": "Yes", "N": "No"})
+
+        df_clean = df_clean.replace([np.inf, -np.inf], np.nan)
+        df_clean = df_clean.dropna()
+        
+        return df_clean
+
+    def _validate_smoking_drinking_data(self, df: pd.DataFrame) -> bool:
+        """Validate if the dataset contains all required features and targets."""
+        logger.info("  [VALIDATE] Running checks on alcohol & smoking dataset...")
+        
+        from src.config.constants import (
+            REVERSE_ANALYSIS_FEATURES,
+            REVERSE_ANALYSIS_TARGET_SMOKING,
+            REVERSE_ANALYSIS_TARGET_ALCOHOL
+        )
+        
+        expected_targets = [REVERSE_ANALYSIS_TARGET_SMOKING, REVERSE_ANALYSIS_TARGET_ALCOHOL]
+        
+        missing_features = [c for c in REVERSE_ANALYSIS_FEATURES if c not in df.columns]
+        missing_targets = [c for c in expected_targets if c not in df.columns]
+        
+        if missing_features or missing_targets:
+            if missing_features:
+                logger.error(f"  [VALIDATE] ❌ Missing features: {missing_features}")
+            if missing_targets:
+                logger.error(f"  [VALIDATE] ❌ Missing targets: {missing_targets}")
+            return False
+            
+        logger.info(f"  [VALIDATE] ✓ Alcohol & smoking dataset ready ({df.shape[0]} rows, {df.shape[1]} cols)")
+        return True
+
+    def _save_cleaned_smoking_drinking_dataset(self, df: pd.DataFrame, filepath: Path):
+        """Save the cleaned dataset to disk."""
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(filepath, index=False)
+        logger.info(f"  [SAVE] Cleaned dataset saved to: {filepath}")
+        analyzer = ReverseLogicDataAnalyzer()
+        analyzer.generate_dataset_report(df)
+
+    # ═══════════════════════════════════════════════════════════
+    #  IMAGE PROCESSING METHODS (Original implementations)
+    # ═══════════════════════════════════════════════════════════
 
     def _start_tissue_preprocessor(self):
         """
@@ -528,31 +803,42 @@ class MultiDatasetOrganizer:
     def _register_in_database(self):
         """
         Register the processed images in the database.
+        Includes error handling to prevent the pipeline from crashing.
         """
         logger.info("\n═══ Phase 7: Registering in DB ═══")
 
-        inspector = sa_inspect(engine)
-        if not inspector.has_table(TrainingImage.__tablename__):
-            self.setup_database()
+        try:
+            inspector = sa_inspect(engine)
+            if not inspector.has_table(TrainingImage.__tablename__):
+                self.setup_database()
 
-        with get_db() as db:
-            db.query(TrainingImage).delete()
-            db.commit()
-            db_records = [
-                {
-                    "file_path": r["file_path"],
-                    "mask_path": r.get("mask_path"),
-                    "label": r["label"],
-                    "dataset_source": r["dataset_source"],
-                    "split": r["split"],
-                    "width": r.get("width"),
-                    "height": r.get("height"),
-                }
-                for r in self.image_records
-            ]
-            repo = TrainingImageRepository(db)
-            count = repo.bulk_insert(db_records)
-            logger.info(f"  ✅ {count} images registered (multi-source 4 datasets)")
+            with get_db() as db:
+                # Limpiar registros anteriores
+                db.query(TrainingImage).delete()
+                db.commit()
+                
+                # Preparar los nuevos registros
+                db_records = [
+                    {
+                        "file_path": r["file_path"],
+                        "mask_path": r.get("mask_path"),
+                        "label": r["label"],
+                        "dataset_source": r["dataset_source"],
+                        "split": r["split"],
+                        "width": r.get("width"),
+                        "height": r.get("height"),
+                    }
+                    for r in self.image_records
+                ]
+                
+                # Inserción masiva
+                repo = TrainingImageRepository(db)
+                count = repo.bulk_insert(db_records)
+                logger.info(f"  ✅ {count} images registered (multi-source 4 datasets)")
+                
+        except Exception as e:
+            logger.error(f"  ❌ Error registering images in the database: {e}")
+            logger.warning("  ⚠️ Continuing pipeline execution without database registration.")
 
     def _verify_source_mixing(self):
         """

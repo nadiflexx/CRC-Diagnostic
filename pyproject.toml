@@ -64,6 +64,7 @@ dependencies = [
     "loguru>=0.7.0",
     "mlflow>=3.10.1",
     "gdown>=5.2.1",
+    "lifelines>=0.30.3",
 ]
 
 [project.optional-dependencies]

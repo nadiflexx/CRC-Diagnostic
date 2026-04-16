@@ -1,11 +1,12 @@
 """
-🌿 Endo-AID — Main Entry Point
+Endo-AID main dashboard.
 """
+
+import streamlit as st
 
 from components.cards import module_card, page_header, stat_card
 from components.loading import show_splash_screen
 from components.sidebar import render_sidebar
-import streamlit as st
 from utils.api_client import get_patients
 from utils.helpers import apply_custom_css
 
@@ -18,49 +19,41 @@ st.set_page_config(
 
 apply_custom_css()
 
-# ── Splash Screen ──
 if "app_loaded" not in st.session_state:
     show_splash_screen()
     st.rerun()
 
-# ── Shared Sidebar ──
 render_sidebar()
 
 
-# ── Main Content ──
 def main() -> None:
     page_header(
         "Clinical Decision Support System",
-        "AI-powered gastrointestinal analysis: image classification, "
-        "risk scoring, and patient tracking.",
+        "AI-powered gastrointestinal analysis: image classification, risk scoring, patient tracking, and model analytics.",
         icon="🌿",
     )
 
     patients = get_patients()
     num_patients = str(len(patients)) if patients else "0"
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown(stat_card("👥", num_patients, "Patients"), unsafe_allow_html=True)
     with col2:
         st.markdown(stat_card("🔬", "3", "AI Models"), unsafe_allow_html=True)
     with col3:
         st.markdown(stat_card("🧪", "7", "Biomarkers"), unsafe_allow_html=True)
-    with col4:
-        st.markdown(stat_card("📈", "98.2%", "Accuracy"), unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("Explore Modules")
 
-    c1, c2, c3 = st.columns(3)
-
+    c1, c2 = st.columns(2)
     with c1:
         st.markdown(
             module_card(
                 "👥",
                 "Patients & History",
-                "Clinical database, patient profiles, and longitudinal "
-                "AI risk tracking.",
+                "Clinical database, patient profiles, and longitudinal AI risk tracking.",
             ),
             unsafe_allow_html=True,
         )
@@ -77,32 +70,28 @@ def main() -> None:
         )
         st.page_link("pages/02_cribado.py", label="Run Screening", icon="🔍")
 
-    with c3:
-        st.markdown(
-            module_card(
-                "📋",
-                "General Screening",
-                "Generic risk assessment using clinical and demographic factors. "
-                "AI-powered CRC prediction.",
-            ),
-            unsafe_allow_html=True,
-        )
-        st.page_link("pages/02_Cribado_General.py", label="Run General Screening", icon="🧠")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    c4 = st.columns(1)[0]
+    c4, c5 = st.columns(2)
     with c4:
         st.markdown(
             module_card(
                 "🔬",
                 "Endoscopy AI",
-                "Deep learning classification, Grad-CAM explainability, "
-                "and U-Net segmentation.",
+                "Deep learning classification, Grad-CAM explainability, and U-Net segmentation.",
             ),
             unsafe_allow_html=True,
         )
         st.page_link("pages/03_endoscopia.py", label="Launch Inference", icon="🧠")
+
+    with c5:
+        st.markdown(
+            module_card(
+                "📊",
+                "Model Analysis",
+                "Comparative visual analytics for colon tabular models, risk trends by country, and diagnostic explainability plots.",
+            ),
+            unsafe_allow_html=True,
+        )
+        st.page_link("pages/04_analysis.py", label="Open Analysis Dashboard", icon="📉")
 
     st.markdown(
         """

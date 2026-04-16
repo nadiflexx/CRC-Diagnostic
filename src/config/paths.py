@@ -135,6 +135,58 @@ class PathSettings(BaseSettings):
         return self.GENERIC_TABULAR_MODEL_DIR / "model_config.pkl"
 
     @property
+    def ANALYSIS_TABULAR_MODEL_DIR(self) -> Path:
+        return self.MODELS / "analysis_tabular"
+
+    @property
+    def ANALYSIS_COLON_LOGISTIC_MODEL_PATH(self) -> Path:
+        return self.ANALYSIS_TABULAR_MODEL_DIR / "logistic_regression_tabular.pkl"
+
+    @property
+    def ANALYSIS_COLON_COX_MODEL_PATH(self) -> Path:
+        return self.ANALYSIS_TABULAR_MODEL_DIR / "cox_model_tabular.pkl"
+
+    @property
+    def ANALYSIS_COLON_EVALUATION_DIR(self) -> Path:
+        return self.ANALYSIS / "colon_cancer_evaluation"
+
+    @property
+    def ANALYSIS_COLON_METADATA_PATH(self) -> Path:
+        return self.ANALYSIS_COLON_EVALUATION_DIR / "model_comparison_summary.csv"
+
+    @property
+    def RAW_TABULAR_CRC_DATASET(self) -> Path:
+        return self.RAW_TABULAR / "colorectal_cancer_dataset.csv"
+
+    @property
+    def ANALYSIS_TABULAR_XGB_MODEL_PATH(self) -> Path:
+        return self.ANALYSIS_TABULAR_MODEL_DIR / "xgboost_colon_analysis.pkl"
+
+    @property
+    def ANALYSIS_TABULAR_REPORT_DIR(self) -> Path:
+        return self.ANALYSIS / "analysis_tabular"
+
+    @property
+    def ANALYSIS_TABULAR_COUNTRY_SUMMARY_PATH(self) -> Path:
+        return self.ANALYSIS_TABULAR_REPORT_DIR / "country_risk_summary.csv"
+
+    @property
+    def REVERSE_LOGIC_MODEL_DIR(self) -> Path:
+        return self.MODELS / "reverse_logic"
+
+    @property
+    def REVERSE_LOGIC_SMOKING_MODEL_PATH(self) -> Path:
+        return self.REVERSE_LOGIC_MODEL_DIR / "reverse_logic_smoking_history.pkl"
+
+    @property
+    def REVERSE_LOGIC_ALCOHOL_MODEL_PATH(self) -> Path:
+        return self.REVERSE_LOGIC_MODEL_DIR / "reverse_logic_alcohol_consumption.pkl"
+
+    @property
+    def REVERSE_LOGIC_ANALYSIS_DIR(self) -> Path:
+        return self.ANALYSIS / "reverse_logic_tabular"
+
+    @property
     def NOTEBOOKS(self) -> Path:
         return self.ROOT / "notebooks"
 
@@ -150,6 +202,10 @@ class PathSettings(BaseSettings):
             self.ANALYSIS,
             self.MODELS,
             self.GENERIC_TABULAR_MODEL_DIR,
+            self.ANALYSIS_TABULAR_MODEL_DIR,
+            self.ANALYSIS_TABULAR_REPORT_DIR,
+            self.REVERSE_LOGIC_MODEL_DIR,
+            self.REVERSE_LOGIC_ANALYSIS_DIR,
             self.LOGS,
             self.NOTEBOOKS,
         ]
