@@ -1,3 +1,18 @@
+"""inspect_inference_package.py
+
+Verifica la integridad y el rendimiento del paquete de inferencia exportado
+(``xgb_inference_package.pkl``) antes de desplegarlo en producción.
+
+Flujo:
+    1. Carga el paquete PKL y extrae modelo, umbral y nombres de features.
+    2. Reconstruye el mismo split test que usó el entrenamiento (stratify, seed=42).
+    3. Calcula métricas sobre el test set y las guarda en ``inspection_metrics.json``.
+    4. Genera los gráficos de evaluación, importancias y SHAP.
+
+Uso:
+    python model/inspect_inference_package.py
+"""
+
 import json
 import importlib
 import os
@@ -36,6 +51,18 @@ OUT_DIR = os.path.join(BASE_DIR, "artifacts", "inspection_plots")
 
 
 def cargar_paquete(pkl_path: str) -> dict:
+    """Carga el paquete de inferencia serializado desde disco.
+
+    Args:
+        pkl_path: Ruta al archivo ``.pkl`` generado por ``xgb_clinical_model.py``.
+
+    Returns:
+        Diccionario con las claves ``model``, ``threshold`` y ``feature_names``.
+
+    Raises:
+        SystemExit: Si el archivo no existe.
+        ValueError: Si el contenido no es un diccionario válido.
+    """
     if not os.path.exists(pkl_path):
         print("NO_PKL", pkl_path)
         raise SystemExit(1)
@@ -46,6 +73,24 @@ def cargar_paquete(pkl_path: str) -> dict:
 
 
 def reconstruir_test_set(csv_path: str, feature_names: list):
+    """Reconstruye el conjunto de test con el mismo split usado en el entrenamiento.
+
+    Replica el ``train_test_split`` estratificado con ``test_size=0.20`` y
+    ``random_state=42`` para garantizar que las métricas se calculan sobre
+    exactamente los mismos pacientes que el modelo nunca ha visto.
+
+    Args:
+        csv_path: Ruta al CSV del dataset clínico-tumoral procesado.
+        feature_names: Lista de nombres de features en el orden del modelo.
+            Si está vacía, se usan todas las columnas numéricas disponibles.
+
+    Returns:
+        Tupla (X_train, X_test, y_train, y_test) como DataFrames y Series.
+
+    Raises:
+        FileNotFoundError: Si el CSV no existe en la ruta indicada.
+        ValueError: Si alguna feature del paquete no está en el CSV.
+    """
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"No existe CSV para evaluar: {csv_path}")
 
@@ -54,7 +99,6 @@ def reconstruir_test_set(csv_path: str, feature_names: list):
     y = df["Diagnosis"]
     X = X.select_dtypes(include=[np.number])
 
-    # Intentamos respetar el mismo orden/seleccion de features del paquete de inferencia.
     if feature_names:
         faltantes = [c for c in feature_names if c not in X.columns]
         if faltantes:
@@ -70,6 +114,18 @@ def reconstruir_test_set(csv_path: str, feature_names: list):
 
 
 def generar_metricas(y_test, y_prob, threshold: float) -> dict:
+    """Calcula el conjunto completo de métricas de clasificación binaria.
+
+    Args:
+        y_test: Array-like de etiquetas reales (0/1).
+        y_prob: Array-like de probabilidades predichas para la clase positiva.
+        threshold: Umbral de decisión aplicado sobre ``y_prob``.
+
+    Returns:
+        Diccionario con las claves: ``threshold``, ``roc_auc``,
+        ``average_precision``, ``recall``, ``precision``, ``f1``,
+        ``specificity`` y ``confusion_matrix``.
+    """
     y_pred = (y_prob >= threshold).astype(int)
     cm = confusion_matrix(y_test, y_pred)
 
@@ -93,7 +149,21 @@ def generar_metricas(y_test, y_prob, threshold: float) -> dict:
     }
 
 
-def plot_panel_evaluacion(y_test, y_prob, threshold: float, out_dir: str):
+def plot_panel_evaluacion(y_test, y_prob, threshold: float, out_dir: str) -> None:
+    """Genera y guarda el panel de evaluación 2×2 como PNG.
+
+    El panel incluye: matriz de confusión, curva ROC, curva
+    precisión-recall y distribución de probabilidades por clase.
+
+    Args:
+        y_test: Array-like de etiquetas reales (0/1).
+        y_prob: Array-like de probabilidades predichas para la clase positiva.
+        threshold: Umbral de decisión utilizado para binarizar las predicciones.
+        out_dir: Directorio donde se guardará ``panel_evaluacion_inferencia.png``.
+
+    Returns:
+        None
+    """
     os.makedirs(out_dir, exist_ok=True)
     y_pred = (y_prob >= threshold).astype(int)
     cm = confusion_matrix(y_test, y_pred)
@@ -158,7 +228,20 @@ def plot_panel_evaluacion(y_test, y_prob, threshold: float, out_dir: str):
     plt.close()
 
 
-def plot_importancias_modelo(model, feature_names: list, out_dir: str):
+def plot_importancias_modelo(model, feature_names: list, out_dir: str) -> None:
+    """Guarda un barplot horizontal con el top-20 de features por importancia.
+
+    Usa ``feature_importances_`` de XGBoost (ganancia media en splits).
+    Si el modelo no expone ese atributo, la función retorna sin error.
+
+    Args:
+        model: Clasificador ``XGBClassifier`` ajustado.
+        feature_names: Lista de nombres de features en el orden del modelo.
+        out_dir: Directorio donde se guardará ``feature_importances_top20.png``.
+
+    Returns:
+        None
+    """
     os.makedirs(out_dir, exist_ok=True)
     if not hasattr(model, "feature_importances_"):
         return
@@ -181,7 +264,21 @@ def plot_importancias_modelo(model, feature_names: list, out_dir: str):
     plt.close()
 
 
-def plot_shap_si_disponible(model, X_test: pd.DataFrame, feature_names: list, out_dir: str):
+def plot_shap_si_disponible(model, X_test: pd.DataFrame, feature_names: list, out_dir: str) -> None:
+    """Genera gráficos SHAP globales si la librería está disponible.
+
+    Produce un beeswarm y un barplot sobre una submuestra de hasta 2 000 pacientes.
+    Si ``shap`` no está instalado, imprime un aviso y retorna sin error.
+
+    Args:
+        model: Clasificador ``XGBClassifier`` ajustado.
+        X_test: DataFrame de features del conjunto de test.
+        feature_names: Lista de nombres de features en el orden del modelo.
+        out_dir: Directorio donde se guardarán ``shap_beeswarm.png`` y ``shap_bar.png``.
+
+    Returns:
+        None
+    """
     if not HAS_SHAP:
         print("SHAP no disponible: se omiten graficos SHAP")
         return
@@ -212,7 +309,15 @@ def plot_shap_si_disponible(model, X_test: pd.DataFrame, feature_names: list, ou
     plt.close()
 
 
-def main():
+def main() -> None:
+    """Punto de entrada: orquesta la inspección completa del paquete de inferencia.
+
+    Carga el PKL, reconstruye el test set, calcula métricas, las serializa
+    en JSON y genera los gráficos de evaluación e interpretabilidad.
+
+    Returns:
+        None
+    """
     pkg = cargar_paquete(PKL_PATH)
     model = pkg.get("model")
     threshold = float(pkg.get("threshold", 0.5))

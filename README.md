@@ -1,157 +1,172 @@
-#  Proyecto CRC — Diagnóstico Clínico-Tumoral (XGBoost)
+﻿# CRC-Diagnostic — Módulo de Diagnóstico Clínico-Tumoral
 
-Esta rama contiene el desarrollo respecto a datos tumorales del sistema predictivo para **Cáncer Colorrectal (CCR)**. A diferencia del modelo basado en hábitos de vida, este módulo genera y analiza biomarcadores de sangre (CEA, Hemoglobina) y features radiómicas SOTA (ADC, Entropía, etc.) simulando el escenario de un hospital real.
-
----
-
-##  Objetivo del Módulo
-
-- **Generar datos sintéticos** biológicamente realistas, introduciendo variables correlacionadas (Matrices de Covarianza multivariantes) e inyectando un 12% de _"Ruido Biológico"_ (Falsos Negativos y Falsos Positivos clínicos) para evitar la fuga de información (**Data Leakage**) y los datasets perfectos (100% Accuracy).
-
-- **Entrenar un modelo XGBoost de producción**, optimizado mediante búsqueda Bayesiana (Optuna), ajustando el umbral de decisión para priorizar el Recall (Sensibilidad) y erradicar los Falsos Negativos hasta el límite matemático posible (~88-90% AUC).
-
-- **Exportar un paquete de inferencia** (`.pkl` y `.json`) listo para ser consumido por un Dashboard médico multimodal (Streamlit).
+Sistema de ayuda al diagnóstico de **Cáncer Colorrectal (CCR)** basado en XGBoost, optimización bayesiana con Optuna y explicabilidad médica con SHAP. Opera sobre biomarcadores hematológicos (CEA, Hemoglobina) y features radiómicas (ADC, Entropía, GLCM…) generadas sintéticamente a partir de distribuciones multivariantes calibradas con guías clínicas reales (NCCN 2023, ESGAR 2022). El resultado se expone a través de un dashboard interactivo en Streamlit.
 
 ---
 
-##  Guía de Ejecución Paso a Paso
+## Objetivos
 
-Para replicar el experimento completo, validar las matemáticas y generar los modelos, ejecuta los siguientes comandos en orden utilizando `uv` (o tu entorno virtual de Python):
-
-### Paso 0: Sincronización del Entorno (Instalación)
-
-Asegúrate de tener instalado el gestor de paquetes `uv`. Antes de correr cualquier script, sincroniza las dependencias e instala el entorno virtual:
-
-```bash
-uv sync
-```
+- **Generar datos sintéticos** biológicamente realistas con distribuciones multivariantes e inyección de un 12 % de ruido biológico (Falsos Negativos y Positivos clínicos), evitando la separabilidad perfecta y el data leakage.
+- **Justificar la elección de XGBoost** mediante benchmark empírico frente a Regresión Logística, KNN, Random Forest y MLP.
+- **Entrenar un clasificador XGBoost de producción** optimizado con Optuna y umbral de decisión ajustado para maximizar Recall ≥ 0.90.
+- **Exportar un paquete de inferencia** (`.pkl`) listo para producción, verificado automáticamente antes del despliegue.
+- **Exponer el modelo** en un dashboard interactivo (Streamlit) con diagnóstico en vivo y explicabilidad SHAP por paciente.
 
 ---
 
-### Paso 1: Generación de la Realidad Biológica
+## Métricas del Modelo Final
 
-Este script toma el dataset base, genera las analíticas de sangre y radiómicas mediante distribuciones multivariantes, y le inyecta el caos biológico del mundo real.
+| Métrica | Valor |
+|---|---|
+| ROC-AUC | 0.8782 |
+| Recall (Sensibilidad) | 0.8965 |
+| Precisión | 0.7940 |
+| F1-Score | 0.8421 |
+| Especificidad (TNR) | 0.7676 |
+| Umbral de decisión | 0.20 |
 
-```bash
-uv run Data_cleaning/clinical_data_generator.py
-```
-
-> **Salida:** Genera el archivo `Data/processed/dataset_clinico_tumoral.csv` con ~335.000 pacientes.
-
----
-
-### Paso 2: Auditoría y Diagnóstico de Datos (Pruebas de Estrés)
-
-Antes de entrenar la IA, debemos demostrar que nuestros datos no son _"demasiado fáciles"_ ni tienen trampas matemáticas. Ejecuta estas dos pruebas:
-
-#### A. Detector de fugas de información
-
-```bash
-uv run model/check_features.py
-```
-
-> **Objetivo:** Verifica que ninguna columna por sí sola sea capaz de separar perfectamente a los pacientes sanos de los enfermos (Cero variables perfectamente separadas).
-
-#### B. La Prueba del Algodón (Baseline Check)
-
-```bash
-uv run model/baseline_check.py
-```
-
-> **Objetivo:** Entrena una Regresión Logística básica. Como inyectamos un 12% de casos atípicos cruzados, este algoritmo lineal debería chocar contra un _"techo de cristal"_ y devolver un ROC-AUC aproximado del **0.88**. Esto certifica que el dataset es un reto real y justifica el uso de Inteligencia Artificial avanzada.
+El techo de ~0.88 AUC no es un fallo: está diseñado deliberadamente para reflejar la ambigüedad clínica real. Ver [`justificacion_datos_sinteticos.md`](justificacion_datos_sinteticos.md) para la justificación completa.
 
 ---
 
-### Paso 3: Entrenamiento MLOps (El Cerebro XGBoost)
-
-Una vez validados los datos, lanzamos el pipeline completo de entrenamiento. Este script ejecutará Optuna, validación cruzada (K-Fold), optimización de umbral y generación de explicabilidad (SHAP).
-
-```bash
-uv run model/xgb_clinical_model.py
-```
-
-> **Salida Esperada:**
-> - Un ROC-AUC que exprime al máximo el límite matemático de la sangre (~0.88).
-> - Gráficos de evaluación y explicabilidad médica (SHAP) guardados en `Data/processed/plots/`.
-> - Modelo de producción exportado en `model/artifacts/`.
-
----
-
-### Paso 4: Verificación del Paquete de Producción
-
-Finalmente, comprobamos que el artefacto generado contiene todo lo necesario para la aplicación web (Modelo, Umbral óptimo, nombres de columnas y métricas).
-
-```bash
-uv run model/inspect_inference_package.py
-```
-
-> **Salida:** Debería imprimir por consola un diccionario con el interior del `.pkl`, confirmando que el XGBoost está listo para integrarse en Streamlit.
-
----
-
-##  Estructura Principal Resultante
+## Estructura del Proyecto
 
 ```
 CRC-Diagnostic/
+├── app.py                                   # Dashboard Streamlit (Endo-AID)
+├── requirements.txt
+├── explicacion_optuna_shap.md               # Documentación: Optuna y SHAP
+├── justificacion_datos_sinteticos.md        # Documentación: techo biológico 88%
+├── justificacion_xgboost_vs_alternativas.md # Documentación: benchmark de modelos
 ├── Data/
-│   ├── processed/              # Datos de salida
-│   │   └── plots/              # Visualizaciones SHAP y curvas ROC/PR
-│   └── raw/                    # Datos de entrada
+│   ├── processed/
+│   │   └── dataset_clinico_tumoral.csv      # ~335 000 pacientes sintéticos (11 features)
+│   └── raw/                                 # Datasets base originales
 ├── Data_cleaning/
-│   └── clinical_data_generator.py   # Motor de datos sintéticos
+│   └── clinical_data_generator.py          # Motor de síntesis multivariante
 └── model/
-    ├── artifacts/              # "Cerebro" final: .pkl y .json
-    ├── baseline_check.py       # Script de auditoría académica (Baseline)
-    ├── check_features.py       # Script de auditoría académica (Fugas)
-    ├── inspect_inference_package.py  # Comprobación de modelo entrenado
-    └── xgb_clinical_model.py   # Orquestador principal MLOps y entrenamiento
+    ├── artifacts/
+    │   ├── xgb_clinical_model.json          # Hiperparámetros óptimos Optuna
+    │   ├── xgb_inference_package.pkl        # Paquete de inferencia: modelo + umbral + feature_names
+    │   └── inspection_plots/                # Gráficos de evaluación + inspection_metrics.json
+    ├── check_features.py                    # Auditoría anti-data leakage
+    ├── compare_models.py                    # Benchmark 5 clasificadores (justifica XGBoost)
+    ├── inspect_inference_package.py         # Verificación del paquete de producción
+    └── xgb_clinical_model.py                # Pipeline MLOps completo (Optuna → SHAP → PKL)
 ```
 
+---
 
-# -- Errores que he tenido --
+## Guía de Ejecución
 
-##  "100% de Precisión" (Evolución del Dataset)
+### 0. Instalación del entorno
 
-Durante el desarrollo de este módulo, nos enfrentamos a un problema clásico en la generación de datos sintéticos médicos: **Separabilidad Perfecta**.
+```bash
+python -m venv .venv
 
-En nuestras primeras iteraciones, el generador multivariante creaba pacientes con distribuciones matemáticas demasiado limpias. El resultado fue que el modelo XGBoost logró un **ROC-AUC del 1.0000 (100% de precisión) y cero Falsos Negativos**. 
+# Windows
+.venv\Scripts\activate
 
-Aunque matemáticamente impecable, **clínicamente esto es una falacia**. En el mundo real:
-1. Existen pacientes con cáncer en estadios muy tempranos cuyos biomarcadores en sangre son idénticos a los de una persona sana.
-2. Existen pacientes sanos con inflamaciones severas (ej. Enfermedad de Crohn) que presentan niveles de CEA y texturas radiómicas alarmantes.
+# Linux / macOS
+source .venv/bin/activate
 
-**La Solución Implementada (Experimento V1):**
-Para crear un escenario de Machine Learning verdaderamente desafiante y realista, reescribimos el motor de datos (`clinical_data_generator.py`) aplicando dos técnicas de MLOps avanzado:
-* **Colapso de Distribuciones:** Acercamos las medias poblacionales de ambas clases para forzar un solapamiento (overlap) natural.
-* **Target Noise (Ruido Absoluto del 12%):** Inyectamos casos clínicos atípicos invirtiendo deliberadamente el diagnóstico de un 12% de los pacientes (simulando los Falsos Positivos y Negativos inherentes a la biología humana).
+pip install -r requirements.txt
+```
 
-**Resultado Final:** Al entrenar el modelo XGBoost sobre este nuevo dataset, el rendimiento cayó a un **ROC-AUC del ~0.88**. Lejos de ser un fracaso, este 88% representa el límite teórico real de lo que un análisis de sangre puede predecir. Este "techo de cristal" es la justificación empírica absoluta de por qué nuestro sistema requiere un modelo multimodal que incluya la **Visión Artificial (CNN) en quirófano** desarrollada en paralelo en este proyecto.
+---
 
-## Justificación del Algoritmo: Del Baseline a XGBoost
+### 1. Generación del dataset sintético
 
-Durante el diseño del modelo tumoral, establecimos un modelo base (*Baseline*) utilizando una **Regresión Logística** clásica (`baseline_check.py`). La evolución final hacia **XGBoost** no fue una elección arbitraria, sino una necesidad técnica y clínica dictada por el comportamiento de los datos:
+Genera `Data/processed/dataset_clinico_tumoral.csv` con ~335 000 pacientes a partir de distribuciones multivariantes calibradas con NCCN 2023 y ESGAR 2022.
 
-1. **El Techo Lineal del Baseline:** Al inyectar el realismo biológico en los datos (solapamiento de features y casos atípicos cruzados), la Regresión Logística lineal se estrelló contra un "techo de cristal". Era incapaz de capturar las interacciones multivariantes complejas (por ejemplo, cómo interactúa una caída de Hemoglobina con la Entropía de la imagen tumoral).
-2. **Fronteras de Decisión No Lineales:** XGBoost (Extreme Gradient Boosting), al basarse en un ensamble de árboles de decisión, demostró una capacidad abrumadoramente superior para trazar fronteras no lineales en un hiperespacio de 11 dimensiones, separando mejor la "zona gris" biológica.
-3. **Erradicación de Falsos Negativos (Sensibilidad):** En oncología, decirle a un paciente enfermo que está sano (Falso Negativo) es el peor error posible. XGBoost nos permitió utilizar hiperparámetros como `scale_pos_weight` y optimización Bayesiana (Optuna) para penalizar asimétricamente los errores. Esto, combinado con un ajuste fino del umbral de decisión (*Threshold Tuning*), nos permitió llevar el Recall por encima del 90% sin que el modelo colapsara, algo matemáticamente inviable con la Regresión Logística.
-4. **Explicabilidad Clínica (SHAP):** La medicina exige modelos interpretables (White-Box). La arquitectura basada en árboles de XGBoost se integra nativamente con la librería **SHAP**, permitiéndonos generar visualizaciones precisas que explican al médico el peso exacto que ha tenido cada biomarcador (CEA, ADC, etc.) en el diagnóstico individual de cada paciente.
+```bash
+python Data_cleaning/clinical_data_generator.py
+```
 
+---
 
-TODO
-mirar de justificar o probrar otros modelos del estilo
+### 2. Auditoría anti-data leakage
 
-pruebas con datos reales
+Comprueba que ninguna feature separa perfectamente a sanos de enfermos por sí sola.
 
-documetancion de datos + graficos
-benchmark modelo + explicar decision/metricas
-modelo analisis optuna y shap
-explicacion metricas con graficos
+```bash
+python model/check_features.py
+```
 
-explicar veces erroneas = dataset de jugeute(100% precision)...
+> Resultado esperado: cero variables con separación perfecta.
 
-eliminar comentarios de ia
+---
 
-añadir comentarios de explicacion en funciones + parametros de entrada + salida
+### 3. Benchmark de clasificadores
 
+Evalúa cinco algoritmos (Regresión Logística, KNN, Random Forest, MLP, XGBoost) mediante validación cruzada estratificada (5-fold) y justifica empíricamente la elección de XGBoost.
 
+```bash
+python model/compare_models.py
+```
+
+> Ver [`justificacion_xgboost_vs_alternativas.md`](justificacion_xgboost_vs_alternativas.md) para los resultados y el análisis completo.
+
+---
+
+### 4. Entrenamiento MLOps
+
+Ejecuta el pipeline completo: búsqueda bayesiana de hiperparámetros (Optuna, 30 trials, 5-fold CV), entrenamiento final, optimización de umbral, gráficos SHAP y exportación del paquete de inferencia.
+
+```bash
+python model/xgb_clinical_model.py
+```
+
+> Salida: `model/artifacts/xgb_inference_package.pkl` y `model/artifacts/xgb_clinical_model.json`.
+
+---
+
+### 5. Verificación del paquete de producción
+
+Valida la integridad del PKL, recalcula métricas sobre el test set y genera los gráficos de evaluación.
+
+```bash
+python model/inspect_inference_package.py
+```
+
+> Salida: `model/artifacts/inspection_plots/` con cuatro PNGs y `inspection_metrics.json`.
+
+---
+
+### 6. Dashboard interactivo
+
+```bash
+streamlit run app.py
+```
+
+Abre `http://localhost:8501`. El dashboard tiene tres pestañas:
+
+| Pestaña | Contenido |
+|---|---|
+| Diagnóstico en Vivo | Formulario de 11 variables clínicas · indicador de riesgo · gráfico SHAP local por paciente |
+| Análisis y Rendimiento | Métricas del modelo · galería de 4 gráficos de evaluación |
+| Documentación Técnica | Justificación del techo biológico · hiperparámetros Optuna · explicación SHAP · referencias |
+
+---
+
+## Stack Tecnológico
+
+| Componente | Librería | Versión mínima |
+|---|---|---|
+| Clasificador | XGBoost | 2.0 |
+| Optimización | Optuna (TPE) | 3.6 |
+| Explicabilidad | SHAP | 0.45 |
+| ML general | scikit-learn | 1.4 |
+| Datos | pandas / numpy | 2.0 / 1.26 |
+| Serialización | joblib | 1.3 |
+| Visualización | matplotlib | 3.8 |
+| Dashboard | Streamlit | 1.33 |
+
+---
+
+## Documentación de Diseño
+
+- [`justificacion_datos_sinteticos.md`](justificacion_datos_sinteticos.md) — Por qué el modelo toca un techo de ~0.88 AUC y qué certifica ese límite.
+- [`justificacion_xgboost_vs_alternativas.md`](justificacion_xgboost_vs_alternativas.md) — Comparativa cuantitativa de los cinco modelos del benchmark.
+- [`explicacion_optuna_shap.md`](explicacion_optuna_shap.md) — Funcionamiento interno de la búsqueda bayesiana y los SHAP values.
 

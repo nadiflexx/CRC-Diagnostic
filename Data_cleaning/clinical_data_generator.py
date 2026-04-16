@@ -4,10 +4,12 @@ clinical_data_generator.py
 Genera un dataset clínico sintético de cáncer colorrectal (CRC) con
 biomarcadores hematológicos y features radiómicas tipo PyRadiomics.
 
-Partimos del CSV base (v1) y para cada paciente pasamos los valores
-clínicos con distribuciones multivariante calibradas a partir de los
-informes (NCCN 2023, ESGAR 2022, Duffy et al. 2021).
+Toma el CSV base (v1) y para cada paciente sintetiza valores clínicos
+mediante distribuciones multivariantes calibradas con los rangos de referencia
+de NCCN 2023, ESGAR 2022 y Duffy et al. 2021.
 
+Uso:
+    python Data_cleaning/clinical_data_generator.py
 """
 
 import os
@@ -15,23 +17,16 @@ import os
 import numpy as np
 import pandas as pd
 
-# Semilla global para que el dataset sea reproducible en cualquier máquina
 RNG = np.random.default_rng(42)
 
+# ── Parámetros de la distribución multivariante por grupo diagnóstico ────────
+# Variables base modeladas: [log(CEA), Hemoglobina, ADC_medio, Entropía, Contraste]
+# Se usa log(CEA) porque la distribución real del CEA es log-normal.
 
-# Parámetros de distribución por grupo diagnóstico.
-# cambiamos 5 variables base con multivariate_normal:
-#   [log(CEA), Hemoglobina, ADC_medio, Entropía, Contraste]
-# Usamos log(CEA) porque el CEA real sigue una distribución log-normal
-
-# Grupo CANCER
 CANCER_MEANS = np.array([np.log(7.0), 11.40, 1240.0, 6.10, 33.0])
 CANCER_STDS  = np.array([1.10,         2.00,  270.0,  1.40, 13.0])
 
-# Correlaciones entre biomarcadores para pacientes con cáncer.
-# Los signos negativos tienen sentido clínico:
-#   - Tumores con CEA alto suelen causar anemia (Hgb baja)
-#   - ADC bajo (difusión restringida) va ligado a más CEA y más entropía
+# Correlaciones clínicas (cáncer): CEA↑ → Hgb↓ anemia; ADC↓ difusión restringida → CEA↑ y entropía↑.
 CANCER_CORR = np.array([
     [ 1.00, -0.30, -0.22,  0.32,  0.25],   # log(CEA)
     [-0.30,  1.00,  0.28, -0.25, -0.18],   # Hemoglobina
@@ -40,9 +35,7 @@ CANCER_CORR = np.array([
     [ 0.25, -0.18, -0.30,  0.48,  1.00],   # Contraste GLCM
 ])
 
-# Grupo SANO
-# Las correlaciones son mucho más débiles: sin tumor no hay la sinergia
-# fisiopatológica que acopla estos biomarcadores en pacientes con cáncer
+# Correlaciones (sano): mucho más débiles al no existir sinergia fisiopatológica tumoral.
 HEALTHY_MEANS = np.array([np.log(2.10), 13.50, 1540.0, 4.80, 21.0])
 HEALTHY_STDS  = np.array([0.70,          1.80,  210.0,  1.10,  7.5])
 
@@ -56,33 +49,42 @@ HEALTHY_CORR = np.array([
 
 
 def corr_a_cov(corr: np.ndarray, stds: np.ndarray) -> np.ndarray:
-    """
-    Convierte una matriz de correlación y un vector de std en una covarianza.
-    Sigma = D * R * D, siendo D = diag(stds).
+    """Convierte una matriz de correlación y desviaciones estándar en una matriz de covarianza.
 
-    Necesitamos esto para pasarle la covarianza a multivariate_normal.
+    Aplica la fórmula Σ = D · R · D, donde D = diag(stds).
+
+    Args:
+        corr: Matriz de correlación de forma (n, n).
+        stds: Vector de desviaciones estándar de longitud n.
+
+    Returns:
+        Matriz de covarianza de forma (n, n).
     """
     D = np.diag(stds)
     return D @ corr @ D
 
 
 def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
-    """
-    Genera los valores clínicos y radiómicos para cada paciente del dataset base.
+    """Genera biomarcadores hematológicos y features radiómicas para cada paciente.
 
-    Necesita como mínimo las columnas Age y Diagnosis.
-    Si existen Gender, Smoking_History, etc., las usa para ajustar los valores.
+    Requiere como mínimo las columnas ``Age`` y ``Diagnosis``. Si existen
+    ``Gender``, ``Smoking_History``, ``Inflammatory_Bowel_Disease`` y
+    ``Genetic_Mutation``, las usa para ajustar los valores generados.
+    Inyecta un 12% de ruido biológico cruzado para evitar separabilidad perfecta.
 
-    Devuelve un DataFrame con las 9 features clínicas y la variable Diagnosis.
+    Args:
+        df_base: DataFrame base con al menos las columnas ``Age`` y ``Diagnosis``.
+
+    Returns:
+        DataFrame con 13 columnas: ``Patient_ID``, 11 features clínicas/radiómicas
+        y ``Diagnosis``.
     """
     df = df_base.copy()
     n  = len(df)
 
-    # Añadimos Patient_ID si el CSV base no lo incluye
     if "Patient_ID" not in df.columns:
         df.insert(0, "Patient_ID", [f"PT-{i:05d}" for i in range(n)])
 
-    # Extraemos las covariables auxiliares; si no existen en el CSV usamos valores neutros
     ages    = df["Age"].to_numpy(float)
     gender  = df.get("Gender",                     pd.Series(np.ones(n,  int))).to_numpy(int)
     smoking = df.get("Smoking_History",            pd.Series(np.zeros(n, int))).to_numpy(int)
@@ -90,11 +92,9 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
     genetic = df.get("Genetic_Mutation",           pd.Series(np.zeros(n, int))).to_numpy(int)
     diag    = df["Diagnosis"].to_numpy(int)
 
-    # Calculamos las matrices de covarianza una sola vez antes de los bucles
     cov_cancer  = corr_a_cov(CANCER_CORR,  CANCER_STDS)
     cov_healthy = corr_a_cov(HEALTHY_CORR, HEALTHY_STDS)
 
-    # Arrays de salida que rellenaremos por grupo
     cea      = np.zeros(n)
     hgb      = np.zeros(n)
     adc_mean = np.zeros(n)
@@ -116,8 +116,7 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
         # Las mujeres tienen de media 1.5 g/dL menos de hemoglobina (OMS 2011)
         offset_genero = np.where(gender[cancer_idx] == 1, 0.0, -1.5)
 
-        # exp deshace el log: obtenemos CEA real con distribución log-normal
-        cea[cancer_idx]      = np.exp(samples_c[:, 0] + delta_cea_edad)
+        cea[cancer_idx]      = np.exp(samples_c[:, 0] + delta_cea_edad)  # exp deshace el log → distribución log-normal
         hgb[cancer_idx]      = samples_c[:, 1] + delta_hgb_edad + offset_genero
         adc_mean[cancer_idx] = samples_c[:, 2]
         entropy[cancer_idx]  = samples_c[:, 3]
@@ -127,15 +126,13 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
     healthy_idx = np.where(diag == 0)[0]
     n_h = len(healthy_idx)
     if n_h > 0:
-        # Ajustamos el CEA basal por hábitos: tabaco, EII y mutaciones genéticas
-        # elevan el CEA en personas sanas (Duffy et al. 2021)
+        # Tabaco, EII y mutaciones genéticas elevan el CEA basal en sanos (Duffy et al. 2021).
         cea_log_base = (
             HEALTHY_MEANS[0]
             + 0.85 * smoking[healthy_idx]
             + 0.30 * ibd[healthy_idx]
             + 0.20 * genetic[healthy_idx]
         )
-        # pasamos con media 0 para log(CEA) y sumamos el offset individual
         means_cero = HEALTHY_MEANS.copy()
         means_cero[0] = 0.0
         samples_h = RNG.multivariate_normal(means_cero, cov_healthy, size=n_h)
@@ -148,15 +145,14 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
         entropy[healthy_idx]  = samples_h[:, 3]
         contrast[healthy_idx] = samples_h[:, 4]
 
-    # Features radiómicas derivadas (calculadas para todos los pacientes)
-    # ADC_Std: el tejido maligno es más heterogéneo, de ahí la mayor variabilidad
+    # ── Features radiómicas derivadas ─────────────────────────────────────────
+    # ADC_Std: mayor heterogeneidad interna en tejido maligno (necrosis e hipoxia).
     adc_std = np.where(
         diag == 1,
         np.abs(adc_mean * 0.20) + RNG.normal(0, 38.0, n),
         np.abs(adc_mean * 0.11) + RNG.normal(0, 24.0, n),
     )
 
-    # Homogeneidad GLCM: disminuye cuando contraste y entropía son altos
     base_hom = np.where(diag == 1, 0.32, 0.72)
     coef_c   = np.where(diag == 1, 0.003, 0.002)
     coef_e   = np.where(diag == 1, 0.016, 0.007)
@@ -168,17 +164,14 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
         - coef_e * np.maximum(entropy  - umbral_e, 0)
     )
 
-    # Los tumores tienden a ser más irregulares (esfericidad menor)
     sph_raw  = np.where(diag == 1,
                         RNG.normal(0.62, 0.13, n),
                         RNG.normal(0.73, 0.13, n))
 
-    # Distribución sesgada a la derecha en malignos (más asimetría de intensidades)
     skew_raw = np.where(diag == 1,
                         RNG.normal(0.85, 0.40, n),
                         RNG.normal(0.05, 0.48, n))
 
-    # Montamos el DataFrame con np.clip para mantener rangos clínicamente válidos
     df_out = pd.DataFrame({
         "Patient_ID":                df["Patient_ID"].values,
         "Age":                       ages,
@@ -195,9 +188,8 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
         "Diagnosis":                 diag,
     })
 
-    # Zona gris biológica:Ruido realista para simular casos clínicos ambiguos y evitar un dataset "perfecto"
-    # A. Cánceres de estadio temprano (~12%) con perfil clínico casi normal
-    # En clínica real, un 15-20% de CRC estadio I tienen CEA <3 ng/mL y Hgb preservada
+    # ── Ruido biológico — zona gris clínica ────────────────────────────────────
+    # CRC estadio temprano (~12%): CEA < 3 ng/mL y Hgb preservada (NCCN 2023).
     c_idx     = df_out.index[df_out["Diagnosis"] == 1].to_numpy()
     n_early   = max(1, int(len(c_idx) * 0.12))
     early_idx = RNG.choice(c_idx, size=n_early, replace=False)
@@ -212,8 +204,7 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
     df_out.loc[early_idx, "PyRad_Shape_Sphericity"]    = RNG.normal(0.75,    0.09, n_early).clip(0.50, 1.00).round(4)
     df_out.loc[early_idx, "PyRad_FirstOrder_Skewness"] = RNG.normal(0.04,    0.38, n_early).round(4)
 
-    # B. Casos inflamatorios (~12% de sanos con perfil radiómico parecido al maligno)
-    # EII activa o diverticulitis puede elevar el CEA y restringir el ADC (ESGAR 2022)
+    # Inflamación severa (~12% de sanos): EII activa o diverticulitis eleva CEA y restringe ADC (ESGAR 2022).
     h_idx      = df_out.index[df_out["Diagnosis"] == 0].to_numpy()
     n_inflam   = max(1, int(len(h_idx) * 0.12))
     inflam_idx = RNG.choice(h_idx, size=n_inflam, replace=False)
@@ -227,8 +218,7 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
     df_out.loc[inflam_idx, "PyRad_Shape_Sphericity"]   = RNG.normal(0.60,    0.12, n_inflam).clip(0.25, 0.88).round(4)
     df_out.loc[inflam_idx, "PyRad_FirstOrder_Skewness"] = RNG.normal(0.38,   0.45, n_inflam).round(4)
 
-    # Ruido biológico: 18% de los sanos reciben perturbaciones que simulan
-    # variabilidad real de laboratorio e imagen (artefactos, diferencias de equipo...)
+    # Variabilidad de laboratorio e imagen (18% de sanos): artefactos y diferencias de equipo.
     sanos_idx = df_out.index[df_out["Diagnosis"] == 0].to_numpy()
     n_noise   = max(1, int(len(sanos_idx) * 0.18))
     noisy_idx = RNG.choice(sanos_idx, size=n_noise, replace=False)
@@ -238,29 +228,24 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
     idx_c = noisy_idx[2*q:3*q]
     idx_d = noisy_idx[3*q:]
 
-    # Pico de CEA benigno (tabaco activo o proceso inflamatorio agudo)
-    df_out.loc[idx_a, "CEA_Level_ng_mL"] = (
+    df_out.loc[idx_a, "CEA_Level_ng_mL"] = (  # pico CEA benigno: tabaco activo o inflamación aguda
         RNG.lognormal(np.log(8.5), 0.60, len(idx_a)).clip(5.0, 40.0).round(2)
     )
-    # Anemia leve no oncológica (ferropénica o por déficit de B12)
-    df_out.loc[idx_b, "Hemoglobin_g_dL"] = (
+    df_out.loc[idx_b, "Hemoglobin_g_dL"] = (  # anemia leve no oncológica (ferropénica o déficit B12)
         RNG.normal(11.5, 1.10, len(idx_b)).clip(8.5, 13.5).round(2)
     )
-    # Variabilidad del ADC por diferencias de equipo o protocolo de adquisición
-    adc_c = df_out.loc[idx_c, "PyRad_ADC_Mean"].to_numpy()
+    adc_c = df_out.loc[idx_c, "PyRad_ADC_Mean"].to_numpy()  # variabilidad ADC por protocolo de adquisición
     df_out.loc[idx_c, "PyRad_ADC_Mean"] = (
         (adc_c * RNG.lognormal(0.0, 0.15, len(idx_c))).clip(800.0, 2500.0).round(2)
     )
-    # Artefactos de textura en la imagen (movimiento, distorsión B0)
-    df_out.loc[idx_d, "PyRad_Entropy"] = (
+    df_out.loc[idx_d, "PyRad_Entropy"] = (  # artefactos de textura: movimiento o distorsión B0
         (df_out.loc[idx_d, "PyRad_Entropy"] + RNG.normal(1.20, 0.45, len(idx_d))).clip(0.1, 10.0).round(4)
     )
     df_out.loc[idx_d, "PyRad_GLCM_Contrast"] = (
         (df_out.loc[idx_d, "PyRad_GLCM_Contrast"] + RNG.normal(10.0, 4.0, len(idx_d))).clip(0.1, 120.0).round(4)
     )
 
-    # Target noise: invertimos la etiqueta de un 12% de pacientes al azar.
-    # Esto simula casos biológicamente ambiguos y fija un techo teórico de AUC (~0.88).
+    # Inversión de etiqueta (12%): simula casos ambiguos y fija el techo teórico de AUC ≈ 0.88.
     np.random.seed(42)
     swap_mask = np.random.rand(len(df_out)) < 0.12
     df_out.loc[swap_mask, "Diagnosis"] = 1 - df_out.loc[swap_mask, "Diagnosis"]
@@ -272,9 +257,13 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
 
 
 def validar_distribuciones(df: pd.DataFrame) -> None:
-    """
-    Imprime media ± std por grupo diagnóstico para comprobar que los valores
-    generados son clínicamente plausibles.
+    """Imprime media ± std por grupo diagnóstico para auditar plausibilidad clínica.
+
+    Args:
+        df: DataFrame generado por ``generar_features_clinicas``.
+
+    Returns:
+        None
     """
     features = [
         "CEA_Level_ng_mL", "Hemoglobin_g_dL", "PyRad_ADC_Mean", "PyRad_ADC_Std",
@@ -291,10 +280,6 @@ def validar_distribuciones(df: pd.DataFrame) -> None:
               f"Sano: {h.mean():>8.2f} +/- {h.std():.2f}")
     print("=" * 80)
 
-
-# =============================================================================
-# PUNTO DE ENTRADA
-# =============================================================================
 
 if __name__ == "__main__":
 
