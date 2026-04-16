@@ -1,6 +1,9 @@
+"""
+Análisis de Lógica Inversa: Hábitos, Daño Metabólico y Riesgo de Cáncer Colorrectal.
+"""
+
 import streamlit as st
 import pandas as pd
-import pickle
 import numpy as np
 import sys
 from pathlib import Path
@@ -8,59 +11,34 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
+from components.sidebar import render_sidebar
+from components.cards import page_header, render_section_card
+from components.banners import show_empty_state
+from utils.helpers import apply_custom_css
+
 # ==========================================
-# FIX DE RUTAS: Añadir el directorio raíz al sys.path
+# CONFIGURACIÓN DE RUTAS Y MODELO
 # ==========================================
 root_path = Path(__file__).parent.parent.parent
 sys.path.append(str(root_path))
 
-# Importamos las constantes y rutas de tu arquitectura actual
 from src.config.paths import paths
 from src.config.constants import (
     REVERSE_ANALYSIS_DEFAULT_PROFILE,
     REVERSE_ANALYSIS_FEATURES
 )
-# Es necesario importar la clase para que pickle pueda deserializar el objeto correctamente
 from src.models.reverse_logic_tabular_model import ReverseLogicTabularModel 
 
-st.set_page_config(page_title="Análisis de Hábitos y Riesgo de Cáncer", page_icon="🔬", layout="wide")
 
-# ==========================================
-# ESTILOS PERSONALIZADOS
-# ==========================================
-st.markdown("""
-<style>
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
-    }
-    .risk-high {
-        color: #e74c3c;
-        font-weight: bold;
-    }
-    .risk-medium {
-        color: #f39c12;
-        font-weight: bold;
-    }
-    .risk-low {
-        color: #27ae60;
-        font-weight: bold;
-    }
-    .header-section {
-        border-left: 5px solid #667eea;
-        padding-left: 15px;
-        margin-top: 20px;
-        margin-bottom: 10px;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(
+    page_title="Análisis de Lógica Inversa · Endo-AID", 
+    page_icon="🌿", 
+    layout="wide"
+)
 
-# ==========================================
-# 1. CARGA DE MODELOS (Caché para rendimiento)
-# ==========================================
+apply_custom_css()
+render_sidebar()
+
 @st.cache_resource
 def load_models():
     """Carga los modelos entrenados de tabaco y alcohol desde la ruta configurada."""
@@ -81,9 +59,6 @@ def load_models():
 
 drk_model, smk_model = load_models()
 
-# ==========================================
-# FUNCIONES AUXILIARES
-# ==========================================
 
 def calculate_bmi(weight, height):
     """Calcula BMI desde peso (kg) y altura (cm)."""
@@ -360,10 +335,13 @@ def create_pathophysiology_chart(drk_prob, smk_prob):
     fig.update_layout(height=500, showlegend=False)
     return fig
 
-# ==========================================
-# 2. INTERFAZ DE USUARIO: CABECERA
-# ==========================================
-st.title("🔬 Análisis de Lógica Inversa: Hábitos, Daño Metabólico y Cáncer de Colon")
+
+# INTERFAZ
+page_header(
+    "Análisis de Lógica Inversa: Hábitos y Riesgo de Cáncer",
+    "Predicción IA de consumo de alcohol y tabaquismo basada en biomarcadores clínicos reales",
+    icon="🔬"
+)
 
 st.markdown("""
 ### ¿Cómo funciona este análisis?
@@ -386,10 +364,12 @@ son **detonantes directos del cáncer colorrectal**.
 
 st.divider()
 
-# ==========================================
-# 3. FORMULARIO DE RECOPILACIÓN DE DATOS
-# ==========================================
-st.markdown('<div class="header-section"><h3>📋 Perfil Clínico del Paciente</h3></div>', unsafe_allow_html=True)
+
+# FORMULARIO
+st.markdown(
+    "<div class='section-title'>📋 Perfil Clínico del Paciente</div>",
+    unsafe_allow_html=True
+)
 
 # Usamos el perfil por defecto de constants.py para pre-llenar el formulario
 defaults = REVERSE_ANALYSIS_DEFAULT_PROFILE
@@ -680,9 +660,9 @@ with st.form("clinical_form"):
         type="primary"
     )
 
-# ==========================================
-# 4. PROCESAMIENTO Y RESULTADOS
-# ==========================================
+
+# PROCESAMIENTO Y RESULTADOS
+
 if submit_button:
     if drk_model is None or smk_model is None:
         st.error("⚠️ **Modelos no encontrados**\n\nAsegúrate de haber ejecutado el entrenamiento previamente.")
@@ -730,12 +710,12 @@ if submit_button:
         except Exception as e:
             st.error(f"❌ Error al predecir: {e}")
             st.stop()
-
-        # ==========================================
-        # 5. DASHBOARD DE RESULTADOS
-        # ==========================================
+        
         st.divider()
-        st.markdown('<div class="header-section"><h2>📊 Resultados del Análisis</h2></div>', unsafe_allow_html=True)
+        st.markdown(
+            "<div class='section-title'>📊 Resultados del Análisis</div>",
+            unsafe_allow_html=True
+        )
         
         # Métricas principales
         col_res1, col_res2, col_res3 = st.columns(3)
@@ -786,10 +766,11 @@ if submit_button:
         
         st.divider()
         
-        # ==========================================
-        # GRÁFICOS CIENTÍFICOS
-        # ==========================================
-        st.markdown('<div class="header-section"><h3>📈 Análisis Detallado & Evidencia Científica</h3></div>', unsafe_allow_html=True)
+
+        st.markdown(
+            "<div class='section-title'>📈 Análisis Detallado & Evidencia Científica</div>",
+            unsafe_allow_html=True
+        )
         
         # Tab 1: Biomarcadores
         tab_bio, tab_met, tab_path, tab_evidence = st.tabs([
@@ -906,10 +887,10 @@ if submit_button:
         
         st.divider()
         
-        # ==========================================
-        # 6. INTERPRETACIÓN CLÍNICA FINAL
-        # ==========================================
-        st.markdown('<div class="header-section"><h2>🩺 Interpretación Clínica Integrada</h2></div>', unsafe_allow_html=True)
+        st.markdown(
+            "<div class='section-title'>🩺 Interpretación Clínica Integrada</div>",
+            unsafe_allow_html=True
+        )
         
         interpretation = []
         
@@ -1030,10 +1011,11 @@ if submit_button:
         
         st.divider()
         
-        # ==========================================
-        # 7. RESUMEN Y RECOMENDACIONES
-        # ==========================================
-        st.markdown('<div class="header-section"><h2>💡 Conclusión y Recomendaciones</h2></div>', unsafe_allow_html=True)
+        #recomendaciones finales
+        st.markdown(
+            "<div class='section-title'>💡 Conclusión y Recomendaciones</div>",
+            unsafe_allow_html=True
+        )
         
         combined_risk = (drk_prob + smk_prob + metabolic_risk) / 3
         
