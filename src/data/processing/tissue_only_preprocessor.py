@@ -14,6 +14,23 @@ from src.config.paths import paths
 
 
 class TissueOnlyPreprocessor:
+    """
+    Preprocessor that extracts clean tissue-only crops from colonoscopy
+    images using a slide-shrink-resize strategy.
+
+    The pipeline per image:
+        1. Suppress large green annotation overlays.
+        2. Find the largest square crop that contains minimal dark pixels
+           (``SLIDE → SHRINK`` loop).
+        3. Generate ``n_crops`` random square sub-crops from that region.
+        4. Resize each crop to ``target_size × target_size`` directly
+           (no padding).
+        5. Apply CLAHE illumination normalisation.
+
+    No black borders are added at any stage, preventing the model from
+    learning shortcut features based on frame artifacts.
+    """
+
     def __init__(
         self,
         target_size=384,
@@ -23,6 +40,26 @@ class TissueOnlyPreprocessor:
         min_tissue_ratio=0.80,
         shrink_step=0.03,
     ):
+        """
+        Initialise the tissue-only preprocessor.
+
+        Args:
+            target_size (int): Output spatial resolution in pixels for
+                each crop. Default is 384.
+            black_threshold (int): Grayscale intensity below which a
+                pixel is considered dark/black. Default is 15.
+            max_black_pct (float): Maximum acceptable percentage of dark
+                pixels (0–100) in a candidate crop window before the
+                algorithm continues shrinking. Default is 0.5.
+            n_crops (int): Number of distinct crops to generate per
+                image. Default is 5.
+            min_tissue_ratio (float): Minimum fraction of non-dark pixels
+                required for a sub-crop to be considered valid. Default
+                is 0.80.
+            shrink_step (float): Proportional reduction applied to the
+                candidate window side length at each iteration of the
+                shrink loop. Default is 0.03.
+        """
         self.target_size = target_size
         self.black_threshold = black_threshold
         self.max_black_pct = max_black_pct
@@ -33,11 +70,21 @@ class TissueOnlyPreprocessor:
 
     def suppress_green(self, img):
         """
-        Suppress green
-        :param img:
-        :return:
-        """
+        Remove large connected green annotation regions from an image.
 
+        Converts the image to HSV, identifies pixels in the green hue
+        range [30, 85] with sufficient saturation and value, filters out
+        small components below 0.3% of total pixels, and zeroes out the
+        dilated mask in the output.
+
+        Args:
+            img (np.ndarray): BGR input image of shape (H, W, 3).
+
+        Returns:
+            np.ndarray: Copy of ``img`` with green annotation regions
+                replaced by black (0, 0, 0). Returns the original image
+                unchanged if the green coverage is below 0.3%.
+        """
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         h, w = img.shape[:2]
         total_pixels = h * w
@@ -65,9 +112,27 @@ class TissueOnlyPreprocessor:
 
     def find_clean_square_crop(self, img):
         """
-        Find clean square crop
-        :param img:
-        :return:
+        Find the largest square crop of the image that minimises dark pixels.
+
+        Uses a sliding-window search combined with iterative shrinking to
+        locate the position and size of the cleanest square region:
+            1. If no dark pixels exist, return the centre square.
+            2. Compute an integral image of the dark-pixel mask for O(1)
+               area sums.
+            3. Slide a window of the current side length over the image,
+               evaluate dark-pixel count, and accept immediately if the
+               window is completely clean.
+            4. If the best window exceeds ``max_black_pct``, shrink the
+               side by ``shrink_step`` and repeat.
+            5. Return the best window found, even if it still contains
+               some dark pixels.
+
+        Args:
+            img (np.ndarray): BGR image after green suppression, shape
+                (H, W, 3).
+
+        Returns:
+            np.ndarray: The extracted square BGR crop. Never padded.
         """
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
@@ -103,12 +168,28 @@ class TissueOnlyPreprocessor:
 
     def _search_best_position(self, integral, h, w, side):
         """
-        Search best position
-        :param integral:
-        :param h:
-        :param w:
-        :param side:
-        :return:
+        Find the window position with the fewest dark pixels at a given side length.
+
+        Performs a two-phase search:
+            1. Coarse grid scan with step size ``max(side, max_offset) // 30``
+               to quickly identify the region of minimum dark-pixel count.
+            2. Fine-grained scan within ±``coarse_step`` of the best coarse
+               position to refine the result.
+
+        Uses integral image arithmetic for O(1) area sums.
+
+        Args:
+            integral (np.ndarray): Cumulative sum array produced by
+                ``cv2.integral`` on the dark-pixel mask, shape
+                (H+1, W+1).
+            h (int): Image height in pixels.
+            w (int): Image width in pixels.
+            side (int): Side length of the square window to evaluate.
+
+        Returns:
+            tuple[int, int, float] | None: ``(y, x, dark_count)`` for
+                the best position found, or ``None`` if the window does
+                not fit within the image.
         """
         max_y, max_x = h - side, w - side
         if max_y < 0 or max_x < 0:
@@ -158,9 +239,24 @@ class TissueOnlyPreprocessor:
 
     def generate_multi_crops(self, clean_square):
         """
-        Generate multi crops
-        :param clean_square:
-        :return:
+        Generate ``n_crops`` random square sub-crops from a clean image region.
+
+        The first crop is always the centre crop (deterministic anchor).
+        Subsequent crops are sampled at random offsets within the valid
+        range. If a random crop fails the tissue validity check it is
+        replaced by a copy of the centre crop to always return exactly
+        ``n_crops`` items.
+
+        Args:
+            clean_square (np.ndarray): Square BGR image region with
+                minimal dark content, as returned by
+                ``find_clean_square_crop``.
+
+        Returns:
+            list[np.ndarray]: List of exactly ``n_crops`` BGR crop arrays,
+                each of size ``crop_size × crop_size`` (before resizing).
+                If the input is smaller than 150 pixels the original is
+                returned ``n_crops`` times unchanged.
         """
         h, w = clean_square.shape[:2]
         side = min(h, w)
@@ -186,9 +282,21 @@ class TissueOnlyPreprocessor:
 
     def _is_valid_crop(self, crop):
         """
-        Is valid crop
-        :param crop:
-        :return:
+        Check whether a candidate crop meets minimum tissue quality criteria.
+
+        A crop is considered valid when all three conditions hold:
+            1. The array is non-empty with height and width ≥ 100 pixels.
+            2. At least ``min_tissue_ratio`` of its pixels are above
+               ``black_threshold`` (sufficient tissue coverage).
+            3. The grayscale variance is ≥ 100 (sufficient texture
+               detail, not a uniform dark patch).
+
+        Args:
+            crop (np.ndarray): BGR candidate crop array.
+
+        Returns:
+            bool: ``True`` if the crop passes all quality checks,
+                ``False`` otherwise.
         """
         if crop.size == 0:
             return False
@@ -202,9 +310,15 @@ class TissueOnlyPreprocessor:
 
     def resize_to_target(self, crop):
         """
-        Resize to target
-        :param crop:
-        :return:
+        Resize a crop to the configured target resolution using Lanczos4.
+
+        Args:
+            crop (np.ndarray): BGR crop array of arbitrary size.
+
+        Returns:
+            np.ndarray: BGR image resized to
+                ``(target_size, target_size)`` using
+                ``cv2.INTER_LANCZOS4``.
         """
         return cv2.resize(
             crop, (self.target_size, self.target_size), interpolation=cv2.INTER_LANCZOS4
@@ -212,9 +326,18 @@ class TissueOnlyPreprocessor:
 
     def normalize_illumination(self, img):
         """
-        Normalize illumination
-        :param img:
-        :return:
+        Apply CLAHE illumination normalisation in the LAB colour space.
+
+        Converts the image to LAB, applies the pre-built CLAHE object to
+        the L channel only (preserving colour information), and converts
+        back to BGR. Very dark images (mean L < 5) are returned unchanged.
+
+        Args:
+            img (np.ndarray): BGR image of shape (H, W, 3).
+
+        Returns:
+            np.ndarray: Illumination-normalised BGR image of the same
+                shape.
         """
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         if gray.mean() < 5:
@@ -226,9 +349,18 @@ class TissueOnlyPreprocessor:
 
     def process_image(self, img):
         """
-        Process image
-        :param img:
-        :return:
+        Run the full tissue-only preprocessing pipeline on a single image.
+
+        Executes in order: green suppression → clean square crop →
+        multi-crop generation → resize → illumination normalisation.
+
+        Args:
+            img (np.ndarray): Raw BGR colonoscopy image of arbitrary
+                resolution.
+
+        Returns:
+            list[np.ndarray]: List of exactly ``n_crops`` BGR images,
+                each of shape ``(target_size, target_size, 3)``.
         """
         clean = self.suppress_green(img)
         clean_square = self.find_clean_square_crop(clean)
@@ -241,9 +373,18 @@ class TissueOnlyPreprocessor:
 
     def process_single(self, img):
         """
-        Process single
-        :param img:
-        :return:
+        Run the preprocessing pipeline and return a single processed image.
+
+        Applies green suppression, finds the best clean square crop, and
+        resizes and normalises it without generating multiple crops.
+
+        Args:
+            img (np.ndarray): Raw BGR colonoscopy image of arbitrary
+                resolution.
+
+        Returns:
+            np.ndarray: Single processed BGR image of shape
+                ``(target_size, target_size, 3)``.
         """
         clean = self.suppress_green(img)
         clean_square = self.find_clean_square_crop(clean)
@@ -255,13 +396,31 @@ def process_dataset_tissue_only(
     clean_dir=None, processed_dir=None, target_size=384, n_crops=5, max_black_pct=0.5
 ):
     """
-    Process dataset tissue only
-    :param clean_dir:
-    :param processed_dir:
-    :param target_size:
-    :param n_crops:
-    :param max_black_pct:
-    :return:
+    Preprocess an entire dataset directory into tissue-only crops.
+
+    Iterates over all class subdirectories inside ``clean_dir``, applies
+    ``TissueOnlyPreprocessor.process_image`` to each image, and saves the
+    resulting crops as numbered JPEG files
+    (``<stem>_crop0.jpg`` … ``<stem>_crop{n-1}.jpg``) inside the
+    corresponding class subdirectory of ``processed_dir``. The class
+    mapping JSON is copied verbatim if present.
+
+    The output directory is completely removed and recreated at the start
+    of each run to ensure a clean state.
+
+    Args:
+        clean_dir (Path | None): Root directory of the cleaned dataset
+            containing per-class subdirectories. Defaults to
+            ``paths.COLON_CLEAN`` if ``None``.
+        processed_dir (Path | None): Destination root directory for the
+            generated crops. Defaults to ``paths.COLON_TISSUE_ONLY`` if
+            ``None``.
+        target_size (int): Output resolution for each crop in pixels.
+            Default is 384.
+        n_crops (int): Number of crop variants to generate per image.
+            Default is 5.
+        max_black_pct (float): Maximum acceptable dark-pixel percentage
+            for the sliding-window search. Default is 0.5.
     """
     clean_dir = clean_dir or paths.COLON_CLEAN
     processed_dir = processed_dir or paths.COLON_TISSUE_ONLY
@@ -302,7 +461,9 @@ def process_dataset_tissue_only(
                 print(f"  ⚠️ Error {img_path.name}: {e}")
                 stats["failed"] += 1
     print(
-        f"Result: {stats['processed']} processed, {stats['total_crops']} crops, {stats['failed']} failed"
+        f"Result: {stats['processed']} processed, "
+        f"{stats['total_crops']} crops, "
+        f"{stats['failed']} failed"
     )
 
 

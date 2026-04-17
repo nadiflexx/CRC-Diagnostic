@@ -16,9 +16,6 @@ from components.cards import page_header, render_section_card
 from components.banners import show_empty_state
 from utils.helpers import apply_custom_css
 
-# ==========================================
-# CONFIGURACIÓN DE RUTAS Y MODELO
-# ==========================================
 root_path = Path(__file__).parent.parent.parent
 sys.path.append(str(root_path))
 
@@ -75,7 +72,7 @@ def get_risk_category(probability):
         return "🟡 MODERADO", "risk-medium"
     else:
         return "🟢 BAJO", "risk-low"
-
+    
 def create_risk_gauge(probability, label):
     """Crea un gráfico tipo gauge para mostrar riesgo."""
     fig = go.Figure(go.Indicator(
@@ -384,10 +381,6 @@ if "form_data" not in st.session_state:
         "waistline": float(defaults.get("waistline", 85.0)),
         "sbp": float(defaults.get("SBP", 120.0)),
         "dbp": float(defaults.get("DBP", 80.0)),
-        "sight_left": float(defaults.get("sight_left", 1.0)),
-        "sight_right": float(defaults.get("sight_right", 1.0)),
-        "hear_left": 0 if defaults.get("hear_left", 1.0) == 1.0 else 1,
-        "hear_right": 0 if defaults.get("hear_right", 1.0) == 1.0 else 1,
         "blds": float(defaults.get("BLDS", 100.0)),
         "tot_chole": float(defaults.get("tot_chole", 190.0)),
         "hdl": float(defaults.get("HDL_chole", 50.0)),
@@ -485,52 +478,6 @@ with st.form("clinical_form"):
                 help="Presión arterial diastólica"
             )
             st.session_state.form_data["dbp"] = dbp
-        
-        with col2:
-            sight_left = st.number_input(
-                "Agudeza Visual Ojo Izquierdo",
-                min_value=0.0, max_value=5.0,
-                value=st.session_state.form_data["sight_left"],
-                step=0.1,
-                key="sight_left_input",
-                help="1.0 = visión normal"
-            )
-            st.session_state.form_data["sight_left"] = sight_left
-            
-            sight_right = st.number_input(
-                "Agudeza Visual Ojo Derecho",
-                min_value=0.0, max_value=5.0,
-                value=st.session_state.form_data["sight_right"],
-                step=0.1,
-                key="sight_right_input",
-                help="1.0 = visión normal"
-            )
-            st.session_state.form_data["sight_right"] = sight_right
-        
-        col3, col4 = st.columns(2)
-        with col3:
-            hear_left_options = ["Normal", "Anormal"]
-            hear_left_idx = st.session_state.form_data["hear_left"]
-            hear_left_label = st.selectbox(
-                "Audición Izquierda",
-                options=hear_left_options,
-                index=hear_left_idx,
-                key="hear_left_input"
-            )
-            hear_left = 1.0 if hear_left_label == "Normal" else 2.0
-            st.session_state.form_data["hear_left"] = 0 if hear_left_label == "Normal" else 1
-        
-        with col4:
-            hear_right_options = ["Normal", "Anormal"]
-            hear_right_idx = st.session_state.form_data["hear_right"]
-            hear_right_label = st.selectbox(
-                "Audición Derecha",
-                options=hear_right_options,
-                index=hear_right_idx,
-                key="hear_right_input"
-            )
-            hear_right = 1.0 if hear_right_label == "Normal" else 2.0
-            st.session_state.form_data["hear_right"] = 0 if hear_right_label == "Normal" else 1
     
     with tab3:
         col1, col2 = st.columns(2)
@@ -673,10 +620,6 @@ if submit_button:
         height = st.session_state.form_data["height"]
         weight = st.session_state.form_data["weight"]
         waistline = st.session_state.form_data["waistline"]
-        sight_left = st.session_state.form_data["sight_left"]
-        sight_right = st.session_state.form_data["sight_right"]
-        hear_left = 1.0 if st.session_state.form_data["hear_left"] == 0 else 2.0
-        hear_right = 1.0 if st.session_state.form_data["hear_right"] == 0 else 2.0
         sbp = st.session_state.form_data["sbp"]
         dbp = st.session_state.form_data["dbp"]
         blds = st.session_state.form_data["blds"]
@@ -695,7 +638,6 @@ if submit_button:
         # Construir DataFrame con las features exactas
         input_data = {
             "sex": sex_str, "height": height, "weight": weight, "waistline": waistline,
-            "sight_left": sight_left, "sight_right": sight_right, "hear_left": hear_left, "hear_right": hear_right,
             "SBP": sbp, "DBP": dbp, "BLDS": blds, "tot_chole": tot_chole, "HDL_chole": hdl,
             "LDL_chole": ldl, "triglyceride": trigly, "hemoglobin": hemo, "urine_protein": urine_prot,
             "serum_creatinine": serum_crea, "SGOT_AST": sgot_ast, "SGOT_ALT": sgot_alt, "gamma_GTP": gamma_gtp,
@@ -1017,7 +959,7 @@ if submit_button:
             unsafe_allow_html=True
         )
         
-        combined_risk = (drk_prob + smk_prob + metabolic_risk) / 3
+        combined_risk = (drk_prob*0.4 + smk_prob*0.4 + metabolic_risk*0.2) / 3
         
         if combined_risk > 65:
             st.error(f"""

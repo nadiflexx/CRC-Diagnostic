@@ -170,19 +170,20 @@ class ReverseLogicTrainer:
 
         for model_type in model_types:
             config = configs.get(model_type, {})
-            cv_summary = model.cross_validate_model(
-                X_train,
-                y_train,
-                model_type=model_type,
-                config=config,
-                cv_folds=REVERSE_ANALYSIS_CV_FOLDS,
-            )
-            print(
-                f"    [CV] {model_type}: "
-                f"acc={cv_summary['accuracy_mean']:.4f}±{cv_summary['accuracy_std']:.4f}, "
-                f"f1={cv_summary['f1_mean']:.4f}±{cv_summary['f1_std']:.4f}, "
-                f"auc={cv_summary['roc_auc_mean']:.4f}±{cv_summary['roc_auc_std']:.4f}"
-            )
+            # COMMENTED FOR FASTER TEST TRAINING
+            # cv_summary = model.cross_validate_model(
+            #     X_train,
+            #     y_train,
+            #     model_type=model_type,
+            #     config=config,
+            #     cv_folds=REVERSE_ANALYSIS_CV_FOLDS,
+            # )
+            # print(
+            #     f"    [CV] {model_type}: "
+            #     f"acc={cv_summary['accuracy_mean']:.4f}±{cv_summary['accuracy_std']:.4f}, "
+            #     f"f1={cv_summary['f1_mean']:.4f}±{cv_summary['f1_std']:.4f}, "
+            #     f"auc={cv_summary['roc_auc_mean']:.4f}±{cv_summary['roc_auc_std']:.4f}"
+            # )
             model.fit(X_train, y_train, model_type=model_type, config=config)
             print(f"    [OK] {model_type} trained successfully")
 
@@ -235,17 +236,18 @@ class ReverseLogicTrainer:
             print(f"    ROC-AUC:    {metrics['roc_auc']:.4f}")
             print(f"    Sensitivity: {metrics['sensitivity']:.4f}")
             print(f"    Specificity: {metrics['specificity']:.4f}")
-            cv_metrics = model.cv_metrics.get(model_type)
-            if cv_metrics:
-                print(
-                    f"    CV Accuracy: {cv_metrics['accuracy_mean']:.4f} ± {cv_metrics['accuracy_std']:.4f}"
-                )
-                print(
-                    f"    CV F1:       {cv_metrics['f1_mean']:.4f} ± {cv_metrics['f1_std']:.4f}"
-                )
-                print(
-                    f"    CV ROC-AUC:  {cv_metrics['roc_auc_mean']:.4f} ± {cv_metrics['roc_auc_std']:.4f}"
-                )
+            # COMMENTED FOR FASTER TEST TRAINING
+            # cv_metrics = model.cv_metrics.get(model_type)
+            # if cv_metrics:
+            #     print(
+            #         f"    CV Accuracy: {cv_metrics['accuracy_mean']:.4f} ± {cv_metrics['accuracy_std']:.4f}"
+            #     )
+            #     print(
+            #         f"    CV F1:       {cv_metrics['f1_mean']:.4f} ± {cv_metrics['f1_std']:.4f}"
+            #     )
+            #     print(
+            #         f"    CV ROC-AUC:  {cv_metrics['roc_auc_mean']:.4f} ± {cv_metrics['roc_auc_std']:.4f}"
+            #     )
 
         return all_metrics
 

@@ -42,8 +42,7 @@ from src.config.paths import paths
 from src.config.generic_tabular_features import (
     INPUT_CSV_TABULAR_PROCESSED,
 )
-from src.evaluation.explainability import GenericTabularExplainer
-
+from src.evaluation.explainability import TabularExplainer
 matplotlib.use('Agg')
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,10 +273,10 @@ def compute_feature_importance(model, X_test_s, y_test, feature_names):
 
 
 def generate_explanations(model, X_test_s, y_test, feature_names, X_train_s):
-    """Crea y aplica el explainer tabular genérico."""
-    print("\n[EXPLAINABILITY] Inicializando GenericTabularExplainer...")
+    """Crea y aplica el explainer tabular."""
+    print("\n[EXPLAINABILITY] Inicializando TabularExplainer...")
     
-    explainer = GenericTabularExplainer(model, feature_names, X_background=X_train_s)
+    explainer = TabularExplainer(model, feature_names, X_background=X_train_s)
     explainer.fit(X_train_s)
     
     # Generar explicación individual para una muestra CRC y una sin cáncer

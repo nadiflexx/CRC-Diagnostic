@@ -14,17 +14,45 @@ from src.config.paths import paths
 
 
 class KaggleLoader:
+    """
+    Utility class for downloading Kaggle datasets via the Kaggle CLI and
+    organising the resulting files into the project directory structure.
+
+    Requires a valid ``kaggle.json`` credentials file located at
+    ``paths.ROOT / ".kaggle" / "kaggle.json"``. A warning is logged if
+    the file is absent, but initialisation does not fail so that other
+    methods (e.g. ``verify_datasets``) remain usable.
+    """
+
     def __init__(self):
+        """
+        Initialise the loader and verify that Kaggle credentials are present.
+
+        Logs a warning if ``kaggle.json`` is not found. No exception is
+        raised so that non-download operations remain available.
+        """
         kaggle_dir = paths.ROOT / ".kaggle"
         if not (kaggle_dir / "kaggle.json").exists():
             logger.warning("kaggle.json not found. Configure Kaggle API.")
 
     def download_dataset(self, dataset_key, target_dir=None):
         """
-        Downloads a Kaggle dataset.
+        Download and unzip a single Kaggle dataset by its project key.
 
-        :param dataset_key: The key of the dataset to download.
-        :param target_dir: The directory to download the dataset to.
+        Invokes the Kaggle CLI (``kaggle datasets download``) as a
+        subprocess with the ``--unzip`` flag.
+
+        Args:
+            dataset_key (str): Key identifying the dataset in
+                ``KAGGLE_DATASETS`` (e.g. ``"cvc_clinicdb"``).
+            target_dir (Path | None): Destination directory. Defaults to
+                ``paths.RAW / dataset_key`` if ``None``.
+
+        Raises:
+            ValueError: If ``dataset_key`` is not present in
+                ``KAGGLE_DATASETS``.
+            subprocess.CalledProcessError: If the Kaggle CLI returns a
+                non-zero exit code.
         """
         if dataset_key not in KAGGLE_DATASETS:
             raise ValueError(f"Unknown dataset: {dataset_key}")
@@ -55,7 +83,11 @@ class KaggleLoader:
 
     def download_all(self):
         """
-        Downloads all Kaggle datasets.
+        Download all datasets defined in ``KAGGLE_DATASETS``.
+
+        Iterates over every key in ``KAGGLE_DATASETS`` and calls
+        ``download_dataset`` for each. Failures are caught and logged
+        without stopping the remaining downloads.
         """
         logger.info("\n═══ Downloading datasets ═══")
         for key in KAGGLE_DATASETS:
@@ -66,9 +98,12 @@ class KaggleLoader:
 
     def download_multi_source(self):
         """
-        Downloads multiple Kaggle datasets.
-        """
+        Download only the supplementary multi-source datasets.
 
+        Downloads ``"cvc_clinicdb"`` and ``"limuc"`` if their target
+        directories are absent or empty. Datasets that already exist on
+        disk are skipped.
+        """
         for key in ["cvc_clinicdb", "limuc"]:
             target = paths.RAW / key
             if target.exists() and any(target.iterdir()):
@@ -81,7 +116,14 @@ class KaggleLoader:
 
     def verify_datasets(self):
         """
-        Verifies the existence of Kaggle datasets.
+        Check whether the expected raw dataset directories contain images.
+
+        Inspects HyperKvasir, CVC-ClinicDB, and LIMUC directories for
+        at least one JPEG or PNG file using a short-circuit glob.
+
+        Returns:
+            dict[str, bool]: Mapping from dataset name to ``True`` if at
+                least one image file was found, ``False`` otherwise.
         """
         logger.info("\n═══ Verifying datasets ═══")
         checks = {
@@ -102,10 +144,14 @@ class KaggleLoader:
 
     def _glob_images(self, directory: Path) -> list[Path]:
         """
-        Glob all image files in a directory.
+        Return all image files in a directory matching known extensions.
 
-        :param directory: The directory to search for images.
-        :return: A list of image file paths.
+        Args:
+            directory (Path): Directory to scan.
+
+        Returns:
+            list[Path]: Sorted list of image file paths whose suffix
+                appears in ``IMAGE_EXTENSIONS``.
         """
         images: list[Path] = []
         for ext in IMAGE_EXTENSIONS:
@@ -114,9 +160,18 @@ class KaggleLoader:
 
     def load_tabular_risk_data(self):
         """
-        Load tabular risk data from CSV files.
+        Load the first CSV file found in the tabular risk data directory.
 
-        :return: A DataFrame containing the loaded data.
+        Args:
+            None
+
+        Returns:
+            pd.DataFrame: DataFrame loaded from the first CSV file found
+                in ``paths.RAW / "tabular_risk"``.
+
+        Raises:
+            FileNotFoundError: If no CSV files are found in the expected
+                directory.
         """
         data_dir = paths.RAW / "tabular_risk"
         csv_files = list(data_dir.glob("*.csv"))
@@ -128,7 +183,16 @@ class KaggleLoader:
 
     def organize_kvasir_seg(self):
         """
-        Organize the Kvasir-SEG dataset.
+        Copy Kvasir-SEG images and their paired masks into the raw image store.
+
+        Looks for the standard ``images/`` and ``masks/`` subdirectories
+        within ``paths.RAW / "kvasir_seg"``. Each image is prefixed with
+        ``"kvasir_"`` and copied to ``paths.RAW_IMAGES / "polyps/"``.
+        The matching mask (if present) is copied to
+        ``paths.RAW_IMAGES / "masks/"`` with the same prefixed name.
+
+        Logs an error if the Kvasir-SEG directory structure is not
+        recognised.
         """
         src_dir = paths.RAW / "kvasir_seg"
         img_src = mask_src = None
@@ -155,7 +219,17 @@ class KaggleLoader:
 
     def organize_curated_colon(self):
         """
-        Organize the Curated Colon dataset.
+        Copy Curated Colon images into the raw image store by folder classification.
+
+        Recursively scans ``paths.RAW / "curated_colon"`` and classifies
+        each subdirectory as polyp or normal based on its lowercased name.
+        Polyp keywords: ``"polyp"``, ``"adenoma"``, ``"cancer"``,
+        ``"tumor"``, ``"malignant"``. Normal keywords: ``"normal"``,
+        ``"healthy"``, ``"benign"``, ``"negative"``. Directories matching
+        neither keyword set are skipped.
+
+        Each image is prefixed with ``"curated_"`` and copied to the
+        appropriate target directory.
         """
         src_dir = paths.RAW / "curated_colon"
         polyp_dir = paths.RAW_IMAGES / "polyps"
@@ -187,7 +261,11 @@ class KaggleLoader:
 
     def organize_all_images(self):
         """
-        Organize all image datasets.
+        Run all image organisation steps in sequence and log a summary.
+
+        Calls ``organize_kvasir_seg`` and ``organize_curated_colon``,
+        then counts and logs the total number of polyp, normal, and mask
+        files in ``paths.RAW_IMAGES``.
         """
         logger.info("\n═══ Organizing images ═══")
         self.organize_kvasir_seg()
@@ -196,7 +274,9 @@ class KaggleLoader:
         normal_count = len(list(paths.RAW_IMAGES.glob("normal/*")))
         mask_count = len(list(paths.RAW_IMAGES.glob("masks/*")))
         logger.info(
-            f"\n📊 SUMMARY:\n   Polyps: {polyp_count}\n   Normals: {normal_count}\n   Masks: {mask_count}"
+            f"\n📊 SUMMARY:\n   Polyps: {polyp_count}\n"
+            f"   Normals: {normal_count}\n"
+            f"   Masks: {mask_count}"
         )
 
 

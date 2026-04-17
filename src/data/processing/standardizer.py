@@ -15,20 +15,49 @@ from src.config.paths import paths
 
 class MultiSourceStandardizer:
     """
-    Standardizer for processing multiple image sources with consistent geometry.
+    Geometry-preserving standardizer for multi-source colonoscopy images.
+
+    Applies the same spatial transformation to both the image and its
+    paired segmentation mask so that pixel-level correspondence is
+    maintained throughout the pipeline. Supports both circular (endoscope
+    FOV) and rectangular frame layouts through automatic FOV detection.
+
+    Pipeline per image:
+        1. Suppress green annotation overlays.
+        2. Detect the field-of-view type (circular or rectangular).
+        3. Crop the tissue region using the appropriate strategy.
+        4. Pad to square and resize to ``target_size × target_size``.
+        5. Normalise illumination with CLAHE in LAB colour space.
     """
 
     def __init__(self, target_size: int = 384):
+        """
+        Initialise the standardizer.
+
+        Args:
+            target_size (int): Output spatial resolution in pixels applied
+                to both images and masks. Default is 384.
+        """
         self.target_size = target_size
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         self.morph_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 
     def suppress_green(self, img: np.ndarray) -> np.ndarray:
         """
-        Suppress green artifacts in the image.
+        Remove large connected green annotation regions from a BGR image.
 
-        :param img: Input image.
-        :return: Image with green artifacts suppressed.
+        Converts to HSV, identifies green pixels in [30, 85] hue with
+        sufficient saturation and value, discards components smaller than
+        0.3% of total pixels, dilates the remaining mask, and zeroes out
+        those pixels in the output.
+
+        Args:
+            img (np.ndarray): BGR input image of shape (H, W, 3).
+
+        Returns:
+            np.ndarray: Copy of ``img`` with green annotation regions set
+                to (0, 0, 0). Returns the original image unchanged if
+                total green coverage is below 0.3%.
         """
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         h, w = img.shape[:2]
@@ -60,10 +89,19 @@ class MultiSourceStandardizer:
 
     def detect_fov_type(self, img: np.ndarray) -> str:
         """
-        Detect the type of field of view in the image.
+        Classify the colonoscopy image layout as circular or rectangular.
 
-        :param img: Input image.
-        :return: Type of field of view ("circular" or "rectangular").
+        Examines the four corner regions (each 10% of image dimensions).
+        If at least three corners have a mean grayscale value below 15,
+        the image is classified as circular (typical endoscope black-border
+        layout); otherwise it is classified as rectangular.
+
+        Args:
+            img (np.ndarray): BGR input image of shape (H, W, 3).
+
+        Returns:
+            str: ``"circular"`` if three or more corners are dark,
+                ``"rectangular"`` otherwise.
         """
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
@@ -79,10 +117,20 @@ class MultiSourceStandardizer:
 
     def _get_circular_crop_coords(self, img):
         """
-        Get coordinates for circular cropping.
+        Compute the axis-aligned square crop coordinates for a circular FOV.
 
-        :param img: Input image.
-        :return: Coordinates for cropping (y1, y2, x1, x2).
+        Thresholds the grayscale image at intensity 15, applies
+        morphological opening and closing, finds the largest external
+        contour, and fits a minimum enclosing circle. The crop is centred
+        on the circle with a half-side of ``radius × 0.68``.
+
+        Args:
+            img (np.ndarray): BGR image with a circular endoscope FOV.
+
+        Returns:
+            tuple[int, int, int, int] | None: ``(y1, y2, x1, x2)``
+                pixel coordinates of the crop, or ``None`` if no valid
+                contour is found or the radius is smaller than 50 pixels.
         """
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
@@ -108,10 +156,21 @@ class MultiSourceStandardizer:
 
     def _get_rectangular_crop_coords(self, img):
         """
-        Get coordinates for rectangular cropping.
+        Compute crop coordinates for a rectangular-framed colonoscopy image.
 
-        :param img: Input image.
-        :return: Coordinates for cropping (y1, y2, x1, x2).
+        Thresholds at intensity 10, applies morphological opening, finds
+        the largest external contour, and uses its bounding rectangle.
+        A 5% inset is applied on all sides to exclude thin dark borders.
+        The crop is rejected if the content area ratio falls outside
+        [0.10, 0.95].
+
+        Args:
+            img (np.ndarray): BGR image with a rectangular frame layout.
+
+        Returns:
+            tuple[int, int, int, int] | None: ``(y1, y2, x1, x2)``
+                pixel coordinates of the crop, or ``None`` if no valid
+                contour is found or the content area ratio is out of range.
         """
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
@@ -136,10 +195,15 @@ class MultiSourceStandardizer:
 
     def _get_crop_coords(self, img):
         """
-        Get coordinates for image cropping.
+        Dispatch to the appropriate crop coordinate method based on FOV type.
 
-        :param img: Input image.
-        :return: Coordinates for cropping (y1, y2, x1, x2).
+        Args:
+            img (np.ndarray): BGR colonoscopy image.
+
+        Returns:
+            tuple[int, int, int, int] | None: ``(y1, y2, x1, x2)``
+                crop coordinates, or ``None`` if no valid crop could be
+                determined.
         """
         fov = self.detect_fov_type(img)
         if fov == "circular":
@@ -148,10 +212,19 @@ class MultiSourceStandardizer:
 
     def extract_tissue(self, img: np.ndarray) -> np.ndarray:
         """
-        Extract the tissue region from the image.
+        Crop the tissue region from a colonoscopy image.
 
-        :param img: Input image.
-        :return: Tissue region.
+        Uses ``_get_crop_coords`` to find the tissue bounding box and
+        returns the cropped sub-image. If no crop coordinates can be
+        determined the full image is returned unchanged.
+
+        Args:
+            img (np.ndarray): BGR colonoscopy image of arbitrary
+                resolution.
+
+        Returns:
+            np.ndarray: Cropped BGR tissue region, or the original
+                image if cropping failed.
         """
         coords = self._get_crop_coords(img)
         if coords:
@@ -161,10 +234,19 @@ class MultiSourceStandardizer:
 
     def standardize_geometry(self, tissue: np.ndarray) -> np.ndarray:
         """
-        Standardize the geometry of the tissue region.
+        Pad a tissue crop to square and resize to the target resolution.
 
-        :param tissue: Tissue region.
-        :return: Standardized tissue region.
+        If the input is not square it is embedded in a zero-filled canvas
+        with size ``max(h, w)`` centred both horizontally and vertically.
+        The padded image is then resized to
+        ``(target_size, target_size)`` using Lanczos4 interpolation.
+
+        Args:
+            tissue (np.ndarray): BGR tissue crop of arbitrary dimensions.
+
+        Returns:
+            np.ndarray: Square BGR image of shape
+                ``(target_size, target_size, 3)``.
         """
         h, w = tissue.shape[:2]
         if h != w:
@@ -181,10 +263,19 @@ class MultiSourceStandardizer:
 
     def _standardize_mask(self, mask: np.ndarray) -> np.ndarray:
         """
-        Standardize the geometry of the mask.
+        Pad a binary mask to square and resize to the target resolution.
 
-        :param mask: Input mask.
-        :return: Standardized mask.
+        Applies the same square padding logic as ``standardize_geometry``
+        but uses nearest-neighbour interpolation to preserve binary mask
+        values without interpolation artefacts.
+
+        Args:
+            mask (np.ndarray): Binary grayscale mask of shape (H, W) with
+                values in {0, 255}.
+
+        Returns:
+            np.ndarray: Resized binary mask of shape
+                ``(target_size, target_size)``.
         """
         h, w = mask.shape[:2]
         if h != w:
@@ -199,10 +290,18 @@ class MultiSourceStandardizer:
 
     def normalize_illumination(self, img: np.ndarray) -> np.ndarray:
         """
-        Normalize the illumination in the image.
+        Apply CLAHE illumination normalisation in the LAB colour space.
 
-        :param img: Input image.
-        :return: Normalized image.
+        Converts to LAB, applies the pre-built CLAHE object to the L
+        channel only, and converts back to BGR. Very dark images (mean
+        grayscale < 5) are returned unchanged to avoid amplifying noise.
+
+        Args:
+            img (np.ndarray): BGR image of shape (H, W, 3).
+
+        Returns:
+            np.ndarray: Illumination-normalised BGR image of the same
+                shape.
         """
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         if gray.mean() < 5:
@@ -214,10 +313,18 @@ class MultiSourceStandardizer:
 
     def process_image(self, img: np.ndarray) -> np.ndarray:
         """
-        Process the image for standardization.
+        Run the full standardisation pipeline on a single image.
 
-        :param img: Input image.
-        :return: Processed image.
+        Steps: green suppression → tissue extraction → geometry
+        standardisation → illumination normalisation.
+
+        Args:
+            img (np.ndarray): Raw BGR colonoscopy image of arbitrary
+                resolution.
+
+        Returns:
+            np.ndarray: Standardised BGR image of shape
+                ``(target_size, target_size, 3)``.
         """
         clean = self.suppress_green(img)
         tissue = self.extract_tissue(clean)
@@ -226,11 +333,27 @@ class MultiSourceStandardizer:
 
     def process_image_and_mask(self, img, mask_gray):
         """
-        Process the image and mask for standardization.
+        Run the standardisation pipeline on an image and its paired mask.
 
-        :param img: Input image.
-        :param mask_gray: Input mask.
-        :return: Processed image and mask.
+        Applies identical spatial transformations to both the image and
+        the mask to preserve pixel-level correspondence. Green suppression
+        and crop coordinates are computed once from the image and applied
+        to both modalities.
+
+        Args:
+            img (np.ndarray): Raw BGR colonoscopy image of shape
+                (H, W, 3).
+            mask_gray (np.ndarray): Grayscale binary segmentation mask of
+                shape (H, W) with values in {0, 255}, spatially aligned
+                with ``img``.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]:
+                - Standardised BGR image of shape
+                  ``(target_size, target_size, 3)``.
+                - Standardised binary mask of shape
+                  ``(target_size, target_size)`` with nearest-neighbour
+                  resizing to preserve mask integrity.
         """
         clean = self.suppress_green(img)
         coords = self._get_crop_coords(clean)
@@ -249,11 +372,27 @@ class MultiSourceStandardizer:
 
 def process_dataset(clean_dir=None, processed_dir=None, target_size=384):
     """
-    Process the dataset for standardization.
+    Standardise an entire dataset directory, aligning masks when available.
 
-    :param clean_dir: Path to the cleaned dataset directory.
-    :param processed_dir: Path to the processed dataset directory.
-    :param target_size: Target size for standardization.
+    Iterates over all class subdirectories inside ``clean_dir``. For each
+    image, if a corresponding mask file exists in ``clean_dir/masks/`` the
+    image and mask are processed together via
+    ``process_image_and_mask``; otherwise the image is processed alone via
+    ``process_image``. Outputs are written as JPEG (quality 95) for images
+    and PNG for masks to avoid lossy compression of binary data.
+
+    The output directory is completely removed and recreated at the start
+    of each run.
+
+    Args:
+        clean_dir (Path | None): Root directory of the cleaned dataset
+            containing per-class subdirectories and an optional ``masks/``
+            subdirectory. Defaults to ``paths.COLON_CLEAN`` if ``None``.
+        processed_dir (Path | None): Destination root directory for
+            standardised outputs. Defaults to ``paths.COLON_PROCESSED``
+            if ``None``.
+        target_size (int): Output spatial resolution in pixels for both
+            images and masks. Default is 384.
     """
     clean_dir = clean_dir or paths.COLON_CLEAN
     processed_dir = processed_dir or paths.COLON_PROCESSED

@@ -1,8 +1,8 @@
 """
 src/evaluation/gradcam.py
 
-Wrapper moderno de Grad-CAM usando pytorch-grad-cam.
-Soporta múltiples variantes: GradCAM, GradCAM++, HiResCAM, ScoreCAM, etc.
+Modern Grad-CAM wrapper using pytorch-grad-cam.
+Supports multiple variants: GradCAM, GradCAM++, HiResCAM, ScoreCAM, etc.
 """
 
 from typing import Literal
@@ -23,7 +23,7 @@ import torch.nn as nn
 from src.config.logger import log as logger
 
 # ═══════════════════════════════════════════════════════════
-#  TIPO DE CAM
+#  CAM METHOD TYPE
 # ═══════════════════════════════════════════════════════════
 
 CAM_METHODS = {
@@ -37,26 +37,43 @@ CamMethod = Literal["gradcam", "gradcam++", "hirescam", "scorecam"]
 
 
 # ═══════════════════════════════════════════════════════════
-#  BÚSQUEDA AUTOMÁTICA DE CAPA TARGET
+#  AUTOMATIC TARGET LAYER DISCOVERY
 # ═══════════════════════════════════════════════════════════
 
 
 def find_target_layer(model: nn.Module) -> nn.Module:
     """
-    Encuentra la última capa convolucional del backbone.
+    Locate the last convolutional layer of the model backbone.
 
-    Compatible con:
-    - EfficientNet (timm)
-    - ResNet
-    - ConvNeXt
-    - Vision Transformers (limitado)
+    Tries multiple discovery strategies in priority order so that it works
+    across common architectures (EfficientNet, ResNet, ConvNeXt, and
+    Vision Transformers with limited support).
+
+    Strategy order:
+        1. Named attributes: ``conv_head``, ``head``, ``norm`` on the
+           backbone — returned only if the attribute is an ``nn.Conv2d``.
+        2. EfficientNet-style ``blocks``: iterates ``backbone.blocks[-1]``
+           and returns the last ``nn.Conv2d`` found.
+        3. ResNet-style ``layer4``: iterates ``backbone.layer4[-1]`` and
+           returns the last ``nn.Conv2d`` found.
+        4. Generic fallback: iterates all named modules of the backbone
+           and returns the last ``nn.Conv2d`` found anywhere.
+
+    Args:
+        model (nn.Module): Model instance. If the model has a ``backbone``
+            attribute it is used as the search root; otherwise the model
+            itself is searched.
 
     Returns:
-        nn.Module: Última capa Conv2d encontrada
+        nn.Module: The target ``nn.Conv2d`` layer for Grad-CAM hook
+            registration.
+
+    Raises:
+        RuntimeError: If no ``nn.Conv2d`` layer can be found in the model.
     """
     backbone = model.backbone if hasattr(model, "backbone") else model
 
-    # ── Estrategia 1: Nombres conocidos ──
+    # ── Strategy 1: Known named attributes ──
     for attr in ["conv_head", "head", "norm"]:
         if hasattr(backbone, attr):
             layer = getattr(backbone, attr)
@@ -64,7 +81,7 @@ def find_target_layer(model: nn.Module) -> nn.Module:
                 logger.info(f"  🎯 Target: backbone.{attr}")
                 return layer
 
-    # ── Estrategia 2: Bloques tipo EfficientNet ──
+    # ── Strategy 2: EfficientNet-style blocks ──
     if hasattr(backbone, "blocks"):
         blocks = backbone.blocks
         if len(blocks) > 0:
@@ -78,7 +95,7 @@ def find_target_layer(model: nn.Module) -> nn.Module:
                 logger.info(f"  🎯 Target: backbone.blocks[-1].{name_found}")
                 return last_conv
 
-    # ── Estrategia 3: ResNet layer4 ──
+    # ── Strategy 3: ResNet layer4 ──
     if hasattr(backbone, "layer4"):
         last_conv = None
         for _, module in backbone.layer4[-1].named_modules():
@@ -88,7 +105,7 @@ def find_target_layer(model: nn.Module) -> nn.Module:
             logger.info("  🎯 Target: backbone.layer4[-1] (ResNet)")
             return last_conv
 
-    # ── Estrategia 4: Búsqueda genérica (última Conv2d) ──
+    # ── Strategy 4: Generic fallback (last Conv2d anywhere) ──
     last_conv = None
     last_name = ""
     for name, module in backbone.named_modules():
@@ -100,11 +117,11 @@ def find_target_layer(model: nn.Module) -> nn.Module:
         logger.info(f"  🎯 Target: backbone.{last_name} (fallback)")
         return last_conv
 
-    raise RuntimeError("❌ No se encontró capa convolucional en el modelo")
+    raise RuntimeError("❌ No convolutional layer found in the model.")
 
 
 # ═══════════════════════════════════════════════════════════
-#  GENERACIÓN DE GRAD-CAM
+#  GRAD-CAM GENERATION
 # ═══════════════════════════════════════════════════════════
 
 
@@ -116,26 +133,43 @@ def generate_gradcam(
     target_layer: nn.Module | None = None,
 ) -> tuple[np.ndarray, int]:
     """
-    Genera mapa Grad-CAM usando pytorch-grad-cam.
+    Generate a Grad-CAM activation map using pytorch-grad-cam.
+
+    The model is set to evaluation mode before the forward pass. If no
+    target class is specified the class with the highest logit is used.
+    The CAM algorithm is instantiated as a context manager so that hooks
+    are cleanly removed after the call.
 
     Args:
-        model: Modelo PyTorch
-        input_tensor: Tensor (1, C, H, W) normalizado
-        target_class: Clase objetivo (None = predicción del modelo)
-        method: Tipo de CAM ("gradcam", "gradcam++", "hirescam", "scorecam")
-        target_layer: Capa objetivo (None = búsqueda automática)
+        model (nn.Module): PyTorch model to explain. Must have at least
+            one ``nn.Conv2d`` layer reachable by ``find_target_layer``.
+        input_tensor (torch.Tensor): Pre-processed input batch of shape
+            (1, C, H, W) already moved to the correct device. Should be
+            normalised with the same statistics used during training.
+        target_class (int | None): Index of the class to explain. If
+            ``None`` the predicted class (argmax of logits) is used.
+            Default is ``None``.
+        method (CamMethod): CAM algorithm to use. One of ``"gradcam"``,
+            ``"gradcam++"``, ``"hirescam"``, or ``"scorecam"``. Default
+            is ``"gradcam++"``.
+        target_layer (nn.Module | None): Specific layer to attach the
+            hooks to. If ``None``, ``find_target_layer`` is called to
+            discover it automatically. Default is ``None``.
 
     Returns:
-        cam: Mapa de calor [0-1] shape (H, W)
-        pred_class: Clase predicha por el modelo
+        tuple[np.ndarray, int]:
+            - Grayscale activation map of shape (H, W) with values
+              normalised to [0, 1] by pytorch-grad-cam.
+            - Predicted class index (argmax of the model logits before
+              any CAM computation).
     """
     model.eval()
 
-    # ── Seleccionar capa ──
+    # ── Select target layer ──
     if target_layer is None:
         target_layer = find_target_layer(model)
 
-    # ── Predicción ──
+    # ── Get model prediction ──
     with torch.no_grad():
         logits = model(input_tensor)
         pred_class = int(torch.argmax(logits, dim=1).item())
@@ -143,23 +177,21 @@ def generate_gradcam(
     if target_class is None:
         target_class = pred_class
 
-    # ── Grad-CAM ──
+    # ── Compute Grad-CAM ──
     cam_algorithm = CAM_METHODS[method]
     targets = [ClassifierOutputTarget(target_class)]
 
     with cam_algorithm(model=model, target_layers=[target_layer]) as cam:
-        # input_tensor debe estar en rango [0, 1] para pytorch-grad-cam
-        # Si está normalizado con ImageNet stats, desnormalizar primero
         grayscale_cam = cam(input_tensor=input_tensor, targets=targets)
 
     # grayscale_cam shape: (batch, H, W)
-    cam_map = grayscale_cam[0]  # (H, W) en [0, 1]
+    cam_map = grayscale_cam[0]  # (H, W) in [0, 1]
 
     return cam_map, pred_class
 
 
 # ═══════════════════════════════════════════════════════════
-#  OVERLAY
+#  HEATMAP OVERLAY
 # ═══════════════════════════════════════════════════════════
 
 
@@ -170,23 +202,36 @@ def create_heatmap_overlay(
     colormap: int = cv2.COLORMAP_JET,
 ) -> np.ndarray:
     """
-    Superpone heatmap Grad-CAM sobre imagen RGB.
+    Blend a Grad-CAM heatmap over an RGB image.
+
+    The CAM map is resized to match the image spatial dimensions and then
+    composited using ``show_cam_on_image`` from pytorch-grad-cam, which
+    handles the colour mapping and alpha blending internally.
 
     Args:
-        img_rgb: Imagen RGB uint8 (H, W, 3)
-        cam: Mapa de calor [0-1] (H_cam, W_cam)
-        alpha: Transparencia del heatmap (0=transparente, 1=opaco)
-        colormap: Mapa de colores OpenCV
+        img_rgb (np.ndarray): Source image in RGB format with dtype
+            ``uint8`` and shape (H, W, 3). Values must be in [0, 255].
+        cam (np.ndarray): Grayscale activation map of shape
+            (H_cam, W_cam) with values in [0, 1]. Resized to (H, W)
+            before blending.
+        alpha (float): Opacity of the heatmap layer. A value of 0 makes
+            the heatmap invisible (only the original image is shown); a
+            value of 1 makes only the heatmap visible. Passed as
+            ``1.0 - alpha`` to the ``image_weight`` parameter of
+            ``show_cam_on_image``. Default is 0.5.
+        colormap (int): OpenCV colormap constant applied to the
+            normalised activation map. Default is ``cv2.COLORMAP_JET``.
 
     Returns:
-        overlay: Imagen RGB uint8 con heatmap superpuesto
+        np.ndarray: Blended image in RGB format with dtype ``uint8`` and
+            shape (H, W, 3).
     """
     h, w = img_rgb.shape[:2]
 
-    # Resize CAM a tamaño de imagen
+    # Resize CAM to image size
     cam_resized = cv2.resize(cam, (w, h), interpolation=cv2.INTER_LINEAR)
 
-    # Usar utilidad de pytorch-grad-cam (más robusta)
+    # Use pytorch-grad-cam utility for robust blending
     img_normalized = img_rgb.astype(np.float32) / 255.0
     overlay = show_cam_on_image(
         img_normalized,
@@ -200,7 +245,7 @@ def create_heatmap_overlay(
 
 
 # ═══════════════════════════════════════════════════════════
-#  ESTADÍSTICAS DE ATENCIÓN
+#  ATTENTION STATISTICS
 # ═══════════════════════════════════════════════════════════
 
 
@@ -209,15 +254,28 @@ def compute_attention_stats(
     center_ratio: float = 0.6,
 ) -> tuple[float, float]:
     """
-    Calcula atención en centro vs borde.
+    Compute mean activation in the central region versus the border region.
+
+    Divides the CAM map into a rectangular centre crop (defined by
+    ``center_ratio``) and the surrounding border. Returns the mean
+    activation in each zone, useful for detecting whether the model
+    attends to clinically relevant central content or peripheral
+    artifacts.
 
     Args:
-        cam: Mapa [0-1] shape (H, W)
-        center_ratio: Proporción del centro (0.6 = 60% central)
+        cam (np.ndarray): Activation map of shape (H, W) with values in
+            [0, 1].
+        center_ratio (float): Fraction of the spatial dimensions occupied
+            by the central zone. A value of 0.6 means the central 60% of
+            both height and width is considered the centre. Default is
+            0.6.
 
     Returns:
-        center_attention: Activación media en centro
-        border_attention: Activación media en borde
+        tuple[float, float]:
+            - ``center_attention``: Mean activation inside the central
+              rectangle. Returns 0.0 if the centre region is empty.
+            - ``border_attention``: Mean activation in the surrounding
+              border pixels. Returns 0.0 if no border pixels exist.
     """
     h, w = cam.shape
     margin_h = int(h * (1 - center_ratio) / 2)
@@ -237,15 +295,25 @@ def compute_pointing_accuracy(
     cam: np.ndarray, center_ratio: float = 0.6
 ) -> tuple[bool, float]:
     """
-    Verifica si el máximo de atención está en el centro.
+    Determine whether the peak activation falls inside the central region.
+
+    Also computes what fraction of the strongest activations (top 10th
+    percentile) are located within the centre, providing a soft measure
+    of how well-localised the model's attention is.
 
     Args:
-        cam: Mapa [0-1] shape (H, W)
-        center_ratio: Proporción del centro
+        cam (np.ndarray): Activation map of shape (H, W) with values in
+            [0, 1].
+        center_ratio (float): Fraction of the spatial dimensions that
+            define the central zone. Default is 0.6.
 
     Returns:
-        max_in_center: True si máximo está en centro
-        center_strong_ratio: % de píxeles fuertes (>90 percentil) en centro
+        tuple[bool, float]:
+            - ``max_in_center`` (bool): ``True`` if the pixel with the
+              highest activation value lies inside the central rectangle.
+            - ``center_strong_ratio`` (float): Proportion of pixels
+              above the 90th-percentile threshold that fall within the
+              central rectangle. Range [0, 1].
     """
     h, w = cam.shape
     margin_h = int(h * (1 - center_ratio) / 2)

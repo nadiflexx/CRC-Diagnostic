@@ -14,6 +14,25 @@ from src.models.tabular_model import TabularCancerModel
 
 
 def validate_data_quality(X, y, feature_names, stage=""):
+    """
+    Run a logistic regression sanity check to detect potential data leakage.
+
+    Fits a ``LogisticRegression`` via 5-fold cross-validation and reports the
+    mean ROC-AUC. If the AUC exceeds 0.95 a leakage warning is emitted and
+    the top-10 most informative features by mutual information are logged.
+
+    Args:
+        X (array-like of shape (n_samples, n_features)): Feature matrix.
+        y (array-like of shape (n_samples,)): Target labels.
+        feature_names (list[str]): Names corresponding to the columns of
+            ``X``, used for mutual-information reporting.
+        stage (str): Label injected into log messages to identify which
+            pipeline stage is being checked. Default is ``""``.
+
+    Returns:
+        bool: ``True`` if the AUC is within an acceptable range (≤ 0.95),
+            ``False`` if a probable leakage is detected.
+    """
     from sklearn.linear_model import LogisticRegression
     from sklearn.model_selection import cross_val_score
 
@@ -36,6 +55,26 @@ def validate_data_quality(X, y, feature_names, stage=""):
 
 
 def train_tabular_pipeline():
+    """
+    Execute the end-to-end tabular cancer model training pipeline.
+
+    Steps:
+        1. Generate a synthetic balanced patient dataset.
+        2. Preprocess features with ``TabularPreprocessor``.
+        3. Run an anti-leakage quality check before splitting.
+        4. Split into train / validation / test sets (70 / 15 / 15).
+        5. Compute class weights and train an XGBoost model.
+        6. Evaluate the model on the held-out test set and cross-validate.
+        7. Generate SHAP explanations for two representative samples.
+        8. Save the trained model and preprocessor to disk.
+
+    Returns:
+        tuple[TabularCancerModel, TabularPreprocessor, dict]:
+            - Trained ``TabularCancerModel`` instance.
+            - Fitted ``TabularPreprocessor`` instance.
+            - Evaluation results dictionary as returned by
+              ``TabularCancerModel.evaluate``.
+    """
     preprocessor = TabularPreprocessor()
     logger.info("═══ Generating Data ═══")
     generator = SyntheticPatientGenerator(seed=42)
@@ -80,7 +119,7 @@ def train_tabular_pipeline():
         explanation = explainer.explain(X_test[i : i + 1])
         logger.info(f"Sample {label} (real={y_test[i]}):")
         for feat, val in explanation["top_risk_factors"][:3]:
-            logger.info(f"  ↑ {feat}: +{val:.4f}")
+            logger.info(f" ↑ {feat}: +{val:.4f}")
     explainer.plot_explanation(
         X_test[0:1], save_path=str(paths.ROOT / "shap_explanation.png")
     )

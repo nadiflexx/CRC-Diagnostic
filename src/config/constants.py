@@ -666,10 +666,11 @@ TABULAR_ANALYSIS_IMAGE_CONFIG = {
  
 # FEATURES (Independent Variables - Clinical & Demographic Indicators)
 REVERSE_ANALYSIS_FEATURES = [
-    "sex", "height", "weight", "waistline", "SBP", "DBP", "BLDS", "tot_chole", "HDL_chole",
+    "sex", "age", "height", "weight", "waistline", "SBP", "DBP", "BLDS", "tot_chole", "HDL_chole",
     "LDL_chole", "triglyceride", "hemoglobin", "urine_protein", "serum_creatinine",
     "SGOT_AST", "SGOT_ALT", "gamma_GTP", "BMI", "AST_ALT_ratio"
 ]
+REVERSE_DROP_FEATURES = ["sight_left", "sight_right", "hear_left", "hear_right"]
 
 # Biomarcadores específicos a analizar
 REVERSE_ANALYSIS_BIOMARKERS = ["SGOT_AST", "SGOT_ALT", "gamma_GTP", "AST_ALT_ratio"]
@@ -680,7 +681,7 @@ REVERSE_ANALYSIS_TARGET_ALCOHOL = "DRK_YN"
  
 # Feature Type Specifications
 REVERSE_ANALYSIS_NUMERIC_FEATURES = [
-    "height", "weight", "waistline", "SBP", "DBP", "BLDS", "tot_chole", "HDL_chole",
+    "age", "height", "weight", "waistline", "SBP", "DBP", "BLDS", "tot_chole", "HDL_chole",
     "LDL_chole", "triglyceride", "hemoglobin", "urine_protein", "serum_creatinine",
     "SGOT_AST", "SGOT_ALT", "gamma_GTP", "BMI", "AST_ALT_ratio"
 ]
@@ -701,7 +702,8 @@ REVERSE_ANALYSIS_XGBOOST_CONFIG = {
 }
 
 REVERSE_ANALYSIS_XGBOOST_FEATURE_WEIGHTS = {
-    "sex": 0.1,
+    "sex": 0.60,
+    "age": 0.80,
 }
  
 REVERSE_ANALYSIS_RANDOM_FOREST_CONFIG = {

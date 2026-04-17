@@ -1,14 +1,15 @@
 """
 src/ml/ensemble_predictor.py
 
-Ensemble Adaptativo con Attention-Gating.
+Adaptive Ensemble with Attention-Gating.
 
-Estrategia:
-  - Pesos DINÁMICOS por imagen basados en Grad-CAM de Model A
-  - Si Model A mira tejido (ratio alto) → confiar más en A
-  - Si Model A mira bordes NEGROS (ratio bajo) → confiar más en B
-  - Si Model A mira bordes con TEJIDO → confiar en A (NO penalizar)
-  - Transición suave con sigmoid
+Strategy:
+    - DYNAMIC per-image weights derived from Model A's Grad-CAM activations.
+    - If Model A attends to tissue (high ratio) → trust Model A more.
+    - If Model A attends to BLACK borders (low ratio) → trust Model B more.
+    - If Model A attends to borders WITH tissue → trust Model A (do not
+      penalise).
+    - Smooth transition between regimes via a sigmoid function.
 """
 
 import json
@@ -50,15 +51,28 @@ TISSUE_DIR = paths.COLON_TISSUE_ONLY
 
 class EnsemblePredictor:
     """
-    Ensemble Adaptativo: Model A + Model B.
+    Adaptive ensemble that combines Model A and Model B predictions.
 
-    Los pesos se ajustan POR IMAGEN según dónde mira Model A:
-    - Mira tejido → confiar en A (tiene contexto útil)
-    - Mira bordes negros → confiar en B (A está usando shortcuts)
-    - Mira bordes con tejido → confiar en A (no es shortcut)
+    Weights are adjusted per image based on where Model A's Grad-CAM
+    activations fall:
+        - Attends to tissue → rely on Model A (useful contextual signal).
+        - Attends to black borders → rely on Model B (Model A is using
+          shortcuts).
+        - Attends to borders containing tissue → rely on Model A (not a
+          shortcut).
+
+    The transition between regimes is smooth, governed by a sigmoid
+    function parameterised by ``sigmoid_center`` and ``sigmoid_slope``.
     """
 
     def __init__(self, device: str | None = None):
+        """
+        Initialise the ensemble predictor with default hyperparameters.
+
+        Args:
+            device (str | None): Target device. If ``None``, CUDA is used
+                when available, otherwise CPU.
+        """
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model_a: ColonCancerClassifier | None = None
@@ -67,11 +81,11 @@ class EnsemblePredictor:
         self.temp_a = 1.0
         self.temp_b = 1.0
 
-        # Pesos BASE (se modulan por atención)
+        # Base weights (modulated by attention at inference time)
         self.alpha_base = 0.5
         self.beta_base = 0.5
 
-        # Parámetros del sigmoid adaptativo
+        # Adaptive sigmoid parameters
         self.sigmoid_center = 1.5
         self.sigmoid_slope = 3.0
         self.alpha_min = 0.20
@@ -82,7 +96,7 @@ class EnsemblePredictor:
         self.class_names: dict[int, str] = {}
         self.class_mapping: dict = {}
 
-        # Preprocesadores
+        # Preprocessors
         self.preprocessor_a = MultiSourceStandardizer(target_size=384)
         self.preprocessor_b = TissueOnlyPreprocessor(target_size=384, n_crops=5)
 
@@ -91,11 +105,21 @@ class EnsemblePredictor:
         self._loaded = False
 
     # ═════════════════════════════════════════════
-    #  CARGA
+    #  LOADING
     # ═════════════════════════════════════════════
 
     def load_models(self) -> bool:
-        """Carga modelos A y B + config ensemble."""
+        """
+        Load Model A, Model B, and the ensemble configuration from disk.
+
+        Attempts to load both models independently. If only Model A is
+        available the ensemble falls back to fixed weights of
+        ``alpha=1.0, beta=0.0`` with adaptive gating disabled.
+
+        Returns:
+            bool: ``True`` if at least Model A was loaded successfully,
+                ``False`` if no model could be loaded.
+        """
         success_a = self._load_model_a()
         success_b = self._load_model_b()
         self._load_ensemble_config()
@@ -104,27 +128,44 @@ class EnsemblePredictor:
 
         if self._loaded:
             logger.info(
-                f"  ✅ Ensemble ADAPTATIVO cargado "
+                f"  ✅ Adaptive ensemble loaded "
                 f"(base α={self.alpha_base:.2f}, β={self.beta_base:.2f})"
             )
         elif success_a:
-            logger.warning("  ⚠️ Solo Model A disponible")
+            logger.warning("  ⚠️ Only Model A available")
             self.alpha_base = 1.0
             self.beta_base = 0.0
             self.use_adaptive = False
             self._loaded = True
         else:
-            logger.error("  ❌ No se pudo cargar ningún modelo")
+            logger.error("  ❌ No model could be loaded")
 
         return self._loaded
 
     @property
     def ensemble_available(self) -> bool:
-        """True si ambos modelos están cargados."""
+        """
+        Check whether both models are loaded and ready for ensemble inference.
+
+        Returns:
+            bool: ``True`` if both ``model_a`` and ``model_b`` are not
+                ``None``.
+        """
         return self.model_a is not None and self.model_b is not None
 
     def _load_model_a(self) -> bool:
-        """Carga Model A (clasificador principal)."""
+        """
+        Load Model A (primary classifier) from its checkpoint file.
+
+        Reads ``paths.CLASSIFIER_CHECKPOINT``, restores model weights,
+        and populates ``self.num_classes``, ``self.class_mapping``,
+        ``self.class_names``, and ``self.temp_a`` from the checkpoint
+        metadata.
+
+        Returns:
+            bool: ``True`` if the checkpoint was found and loaded
+                successfully, ``False`` otherwise.
+        """
         path = paths.CLASSIFIER_CHECKPOINT
         if not path.exists():
             return False
@@ -154,7 +195,16 @@ class EnsemblePredictor:
         return True
 
     def _load_model_b(self) -> bool:
-        """Carga Model B (tissue-only)."""
+        """
+        Load Model B (tissue-only classifier) from its checkpoint file.
+
+        Reads ``paths.TISSUE_CLASSIFIER_CHECKPOINT`` and restores model
+        weights and temperature into ``self.model_b`` and ``self.temp_b``.
+
+        Returns:
+            bool: ``True`` if the checkpoint was found and loaded
+                successfully, ``False`` otherwise.
+        """
         path = paths.TISSUE_CLASSIFIER_CHECKPOINT
         if not path.exists():
             return False
@@ -179,7 +229,14 @@ class EnsemblePredictor:
         return True
 
     def _load_ensemble_config(self):
-        """Carga configuración del ensemble."""
+        """
+        Load adaptive ensemble hyperparameters from the JSON config file.
+
+        Reads ``paths.ENSEMBLE_CONFIG_PATH`` and updates base weights,
+        sigmoid parameters, and temperature values. If the file does not
+        exist or cannot be parsed the method returns silently, leaving
+        all parameters at their default values.
+        """
         config_path = paths.ENSEMBLE_CONFIG_PATH
         if not config_path.exists():
             return
@@ -201,7 +258,7 @@ class EnsemblePredictor:
                 f"adaptive={self.use_adaptive}"
             )
         except Exception as e:
-            logger.warning(f"  ⚠️ Error config: {e}")
+            logger.warning(f"  ⚠️ Config error: {e}")
 
     # ═════════════════════════════════════════════
     #  ATTENTION RATIO (content-aware)
@@ -213,14 +270,41 @@ class EnsemblePredictor:
         preprocessed_bgr: np.ndarray | None = None,
     ) -> float:
         """
-        Analiza A QUÉ mira Model A (no DÓNDE).
+        Compute a content-aware attention ratio from Model A's Grad-CAM map.
 
-        Criterio único: ¿Mira TEJIDO o ARTEFACTOS OSCUROS?
+        Analyses WHAT Model A is looking at (tissue vs. dark artifacts),
+        not WHERE in the image it looks. The ratio is used to decide how
+        much to trust Model A versus Model B for a given image.
+
+        Algorithm:
+            1. Generate a Grad-CAM activation map for the predicted class.
+            2. Identify the top-10% high-attention pixels.
+            3. Measure the brightness distribution of those pixels in the
+               preprocessed grayscale image.
+            4. Classify the attention content into one of four regimes:
+               bright tissue (ratio ≈ 3.0), normal tissue (≈ 2.0),
+               grey zone (0.7–1.2), or dark artifacts (≈ 0.3).
+            5. Apply an additional penalty if more than 30% of attended
+               pixels are near-black (< 20 intensity).
+            6. Apply a further penalty if the point of maximum activation
+               is near-black (< 30 intensity) but the overall ratio is
+               still high.
+
+        Args:
+            tensor_a (torch.Tensor): Preprocessed input tensor already on
+                the correct device, shape (1, C, H, W). Used to generate
+                the Grad-CAM map via Model A.
+            preprocessed_bgr (np.ndarray | None): BGR image array produced
+                by ``preprocessor_a.process_image`` of shape (H, W, 3).
+                If ``None`` a neutral ratio of 1.5 is returned immediately.
 
         Returns:
-            > 2.0: Mira tejido iluminado → confiar en A
-            ~ 1.0: Zona gris/ambigua → neutro
-            < 0.5: Mira artefactos negros → confiar en B
+            float: Attention ratio value:
+                - > 2.0: Model A attends to well-lit tissue → trust Model A.
+                - ~ 1.0: Ambiguous zone → neutral weighting.
+                - < 0.5: Model A attends to dark artifacts → trust Model B.
+                Returns 1.5 if Grad-CAM fails or no attended pixels are
+                found.
         """
         try:
             cam, _ = generate_gradcam(
@@ -231,24 +315,16 @@ class EnsemblePredictor:
             )
 
             if preprocessed_bgr is None:
-                logger.info("  📊 Sin imagen BGR → ratio neutro 1.5")
+                logger.info("  📊 No BGR image → neutral ratio 1.5")
                 return 1.5
-
-            # ═══════════════════════════════════════════════════════════
-            # PASO 1: Identificar zonas de ALTA atención
-            # ═══════════════════════════════════════════════════════════
 
             h_cam, w_cam = cam.shape
             threshold = np.percentile(cam, 90)
             hot_mask = cam >= threshold
 
             if hot_mask.sum() == 0:
-                logger.info("  📊 Sin atención detectada → ratio neutro 1.5")
+                logger.info("  📊 No attention detected → neutral ratio 1.5")
                 return 1.5
-
-            # ═══════════════════════════════════════════════════════════
-            # PASO 2: Analizar el CONTENIDO de las zonas calientes
-            # ═══════════════════════════════════════════════════════════
 
             gray = cv2.cvtColor(preprocessed_bgr, cv2.COLOR_BGR2GRAY)
             h_img, w_img = gray.shape
@@ -263,142 +339,122 @@ class EnsemblePredictor:
             if len(attention_pixels) == 0:
                 return 1.5
 
-            # ═══════════════════════════════════════════════════════════
-            # PASO 3: Clasificar el contenido por BRILLO
-            # ═══════════════════════════════════════════════════════════
-
-            # Estadísticas de brillo
             mean_brightness = float(np.mean(attention_pixels))
             median_brightness = float(np.median(attention_pixels))
             p25_brightness = float(np.percentile(attention_pixels, 25))
             p75_brightness = float(np.percentile(attention_pixels, 75))
 
-            # Distribución global de la imagen
             img_p25 = np.percentile(gray, 25)
             img_p50 = np.percentile(gray, 50)
             img_p75 = np.percentile(gray, 75)
 
             logger.info(
-                f"  📊 Imagen: p25={img_p25:.0f}, p50={img_p50:.0f}, p75={img_p75:.0f}"
+                f"  📊 Image: p25={img_p25:.0f}, p50={img_p50:.0f}, p75={img_p75:.0f}"
             )
             logger.info(
-                f"  📊 Atención: mean={mean_brightness:.0f}, "
+                f"  📊 Attention: mean={mean_brightness:.0f}, "
                 f"median={median_brightness:.0f}, "
                 f"p25={p25_brightness:.0f}, p75={p75_brightness:.0f}"
             )
 
-            # ═══════════════════════════════════════════════════════════
-            # PASO 4: Calcular ratio basado en CALIDAD del contenido
-            # ═══════════════════════════════════════════════════════════
-
-            # Caso 1: Mira MAYORMENTE tejido brillante
             if median_brightness > img_p75:
-                # Mira el cuartil superior → tejido bien iluminado
                 ratio = 3.0
                 logger.info(
-                    f"  📊 ✅ TEJIDO BRILLANTE: median={median_brightness:.0f} "
+                    f"  📊 ✅ BRIGHT TISSUE: median={median_brightness:.0f} "
                     f"> p75={img_p75:.0f} → ratio={ratio:.2f}"
                 )
 
-            # Caso 2: Mira tejido promedio
             elif median_brightness > img_p50:
-                # Mira por encima de la mediana → tejido normal
                 ratio = 2.0
                 logger.info(
-                    f"  📊 ✅ TEJIDO NORMAL: median={median_brightness:.0f} "
+                    f"  📊 ✅ NORMAL TISSUE: median={median_brightness:.0f} "
                     f"> p50={img_p50:.0f} → ratio={ratio:.2f}"
                 )
 
-            # Caso 3: Mira zona intermedia (puede ser tejido oscuro o artefacto)
             elif median_brightness > img_p25:
-                # Entre p25 y p50 → zona gris
                 dark_pixels = np.sum(attention_pixels < img_p25)
                 dark_ratio = dark_pixels / len(attention_pixels)
 
                 if dark_ratio > 0.5:
-                    # Más del 50% mira zonas oscuras → sospechoso
                     ratio = 0.7
                     logger.info(
-                        f"  📊 ⚠️  ZONA GRIS con {dark_ratio:.0%} oscura "
+                        f"  📊 ⚠️  GREY ZONE with {dark_ratio:.0%} dark "
                         f"→ ratio={ratio:.2f}"
                     )
                 else:
-                    # Distribución mixta → neutro
                     ratio = 1.2
-                    logger.info(f"  📊 ⚠️  ZONA GRIS mixta → ratio={ratio:.2f}")
+                    logger.info(f"  📊 ⚠️  MIXED GREY ZONE → ratio={ratio:.2f}")
 
-            # Caso 4: Mira MAYORMENTE zonas oscuras (artefactos)
             else:
-                # Mediana por debajo de p25 → definitivamente artefactos
                 ratio = 0.3
                 logger.info(
-                    f"  📊 🚨 ARTEFACTO OSCURO: median={median_brightness:.0f} "
+                    f"  📊 🚨 DARK ARTIFACT: median={median_brightness:.0f} "
                     f"< p25={img_p25:.0f} → ratio={ratio:.2f}"
                 )
 
-            # ═══════════════════════════════════════════════════════════
-            # PASO 5: Penalización adicional por outliers extremos
-            # ═══════════════════════════════════════════════════════════
-
-            # Si tiene píxeles MUY oscuros (posibles marcos negros)
             very_dark_pixels = np.sum(attention_pixels < 20)
             very_dark_ratio = very_dark_pixels / len(attention_pixels)
 
             if very_dark_ratio > 0.3:
-                # Más del 30% de la atención está en píxeles < 20 → artefacto
                 penalty = 0.5
                 ratio *= penalty
                 logger.info(
-                    f"  📊 🚨 {very_dark_ratio:.0%} atención en NEGRO PURO "
-                    f"(<20) → penalización ×{penalty} → ratio={ratio:.2f}"
+                    f"  📊 🚨 {very_dark_ratio:.0%} attention on PURE BLACK "
+                    f"(<20) → penalty ×{penalty} → ratio={ratio:.2f}"
                 )
 
-            # ═══════════════════════════════════════════════════════════
-            # PASO 6: Verificación de coherencia espacial
-            # ═══════════════════════════════════════════════════════════
-
-            # Punto de máxima atención
             max_pos = np.unravel_index(cam.argmax(), cam.shape)
             max_y = int(max_pos[0] / h_cam * h_img)
             max_x = int(max_pos[1] / w_cam * w_img)
 
-            # Brillo en el punto máximo (ventana 11x11)
             y1, y2 = max(0, max_y - 5), min(h_img, max_y + 6)
             x1, x2 = max(0, max_x - 5), min(w_img, max_x + 6)
             max_point_brightness = float(gray[y1:y2, x1:x2].mean())
 
             logger.info(
-                f"  📊 Punto máximo: br={max_point_brightness:.0f} "
-                f"en ({max_x}, {max_y})"
+                f"  📊 Max point: brightness={max_point_brightness:.0f} "
+                f"at ({max_x}, {max_y})"
             )
 
-            # Si el punto máximo es muy oscuro, penalizar incluso si el promedio es OK
             if max_point_brightness < 30 and ratio > 1.0:
                 penalty = 0.6
                 ratio *= penalty
                 logger.info(
-                    f"  📊 🚨 Máximo en NEGRO ({max_point_brightness:.0f}<30) "
-                    f"→ penalización ×{penalty} → ratio={ratio:.2f}"
+                    f"  📊 🚨 Maximum at BLACK ({max_point_brightness:.0f}<30) "
+                    f"→ penalty ×{penalty} → ratio={ratio:.2f}"
                 )
 
             return float(ratio)
 
         except Exception as e:
-            logger.warning(f"  ⚠️ Attention ratio falló: {e}")
+            logger.warning(f"  ⚠️ Attention ratio failed: {e}")
         return 1.5
 
     # ═════════════════════════════════════════════
-    #  COMBINACIÓN ADAPTATIVA
+    #  ADAPTIVE COMBINATION
     # ═════════════════════════════════════════════
 
     def compute_adaptive_weights(self, attention_ratio: float) -> tuple[float, float]:
         """
-        Calcula pesos dinámicos basados en attention ratio.
+        Derive dynamic per-image ensemble weights from the attention ratio.
 
-        Sigmoid suave:
-          ratio=3.0 → α=0.75, β=0.25  (confiar en A, mira tejido)
-          ratio=1.3 → α=0.50, β=0.50  (neutro)
-          ratio=0.3 → α=0.26, β=0.74  (confiar en B, A mira artefactos)
+        Maps the attention ratio through a sigmoid function centred at
+        ``sigmoid_center`` with steepness ``sigmoid_slope``, then linearly
+        scales the result into [``alpha_min``, ``alpha_max``].
+
+        Reference values (default parameters):
+            - ratio = 3.0 → α ≈ 0.75, β ≈ 0.25  (trust Model A).
+            - ratio = 1.3 → α ≈ 0.50, β ≈ 0.50  (neutral).
+            - ratio = 0.3 → α ≈ 0.26, β ≈ 0.74  (trust Model B).
+
+        Args:
+            attention_ratio (float): Content-aware attention ratio as
+                returned by ``compute_attention_ratio``.
+
+        Returns:
+            tuple[float, float]: ``(alpha, beta)`` where
+                ``alpha + beta = 1.0``. Both values are rounded to three
+                decimal places.
         """
         sigmoid_val = 1.0 / (
             1.0 + np.exp(-self.sigmoid_slope * (attention_ratio - self.sigmoid_center))
@@ -416,10 +472,27 @@ class EnsemblePredictor:
         attention_ratio: float | None = None,
     ) -> tuple[np.ndarray, float, float]:
         """
-        Combina predicciones con pesos adaptativos.
+        Linearly combine Model A and Model B probability vectors.
+
+        If adaptive mode is enabled and an attention ratio is provided the
+        weights are computed dynamically via ``compute_adaptive_weights``.
+        Otherwise the fixed base weights ``alpha_base`` and ``beta_base``
+        are used.
+
+        Args:
+            probs_a (np.ndarray): Softmax probability vector from Model A,
+                shape (num_classes,).
+            probs_b (np.ndarray): Softmax probability vector from Model B,
+                shape (num_classes,).
+            attention_ratio (float | None): Attention ratio from
+                ``compute_attention_ratio``. If ``None`` or adaptive mode
+                is disabled, fixed base weights are applied.
 
         Returns:
-            (probs_combined, alpha_used, beta_used)
+            tuple[np.ndarray, float, float]:
+                - Combined probability vector of shape (num_classes,).
+                - ``alpha`` weight actually applied to Model A.
+                - ``beta`` weight actually applied to Model B.
         """
         if self.use_adaptive and attention_ratio is not None:
             alpha, beta = self.compute_adaptive_weights(attention_ratio)
@@ -431,42 +504,69 @@ class EnsemblePredictor:
         return combined, alpha, beta
 
     # ═════════════════════════════════════════════
-    #  PREDICCIÓN COMPLETA
+    #  FULL PREDICTION
     # ═════════════════════════════════════════════
 
     def predict(self, image: np.ndarray | str | Path) -> dict:
         """
-        Predicción con ensemble adaptativo.
+        Run the full adaptive ensemble inference pipeline on a single image.
 
-        1. Model A predice + preprocesa imagen
-        2. Grad-CAM → attention ratio (content-aware)
-        3. Model B predice (tissue-only multi-crop)
-        4. Pesos dinámicos según attention ratio
-        5. Combinar
+        Steps:
+            1. Load the image from disk if a path is provided.
+            2. Obtain Model A probabilities and the preprocessed tensor.
+            3. Compute the content-aware attention ratio via Grad-CAM.
+            4. Obtain Model B probabilities via multi-crop inference.
+            5. Compute adaptive ensemble weights from the attention ratio.
+            6. Combine both probability vectors and produce the final
+               prediction.
+
+        Args:
+            image (np.ndarray | str | Path): Input image as a BGR NumPy
+                array or a file path. If a path is given it is loaded with
+                ``cv2.imread``.
+
+        Returns:
+            dict: Prediction results with the following keys:
+                - ``"class_idx"`` (int): Predicted class index.
+                - ``"class_name"`` (str): Human-readable predicted class
+                  name.
+                - ``"confidence"`` (float): Probability of the predicted
+                  class.
+                - ``"probabilities"`` (list[float]): Combined probability
+                  vector.
+                - ``"model_a_probs"`` (list[float]): Model A probabilities.
+                - ``"model_b_probs"`` (list[float]): Model B probabilities.
+                - ``"attention_ratio"`` (float | None): Computed attention
+                  ratio, or ``None`` if adaptive mode is disabled.
+                - ``"alpha_used"`` (float): Model A weight used.
+                - ``"beta_used"`` (float): Model B weight used.
+                - ``"mode"`` (str): ``"adaptive"`` or ``"fixed"``.
+
+        Raises:
+            RuntimeError: If ``load_models`` has not been called before
+                ``predict``.
+            ValueError: If the provided file path cannot be read by
+                ``cv2.imread``.
         """
         if not self._loaded:
-            raise RuntimeError("Modelos no cargados. Llama load_models() primero.")
+            raise RuntimeError("Models not loaded. Call load_models() first.")
 
         if isinstance(image, (str, Path)):
             image = cv2.imread(str(image))
             if image is None:
-                raise ValueError("No se pudo cargar la imagen")
+                raise ValueError("Could not load image.")
 
-        # ── Model A (devuelve también imagen preprocesada) ──
         probs_a, tensor_a, preprocessed_a = self._predict_model_a_with_tensor(image)
 
-        # ── Attention ratio (content-aware) ──
         attention_ratio = None
         if self.use_adaptive and self.model_b is not None:
             attention_ratio = self.compute_attention_ratio(tensor_a, preprocessed_a)
 
-        # ── Model B ──
         if self.model_b is not None and self.beta_base > 0:
             probs_b = self._predict_model_b(image)
         else:
             probs_b = probs_a
 
-        # ── Combinar ──
         probs, alpha_used, beta_used = self.combine_predictions(
             probs_a, probs_b, attention_ratio
         )
@@ -499,10 +599,23 @@ class EnsemblePredictor:
         self, img_bgr: np.ndarray
     ) -> tuple[np.ndarray, torch.Tensor, np.ndarray]:
         """
-        Predice con Model A.
+        Run Model A on a BGR image and return probabilities, tensor, and
+        the preprocessed image.
+
+        The image is standardised by ``preprocessor_a``, converted to RGB,
+        transformed to a tensor, and forwarded through Model A with
+        temperature scaling.
+
+        Args:
+            img_bgr (np.ndarray): Raw BGR input image of shape (H, W, 3).
 
         Returns:
-            (probabilidades, tensor, imagen_preprocesada_bgr)
+            tuple[np.ndarray, torch.Tensor, np.ndarray]:
+                - Softmax probability vector of shape (num_classes,).
+                - Input tensor on the target device, shape (1, C, H, W).
+                  Required for subsequent Grad-CAM computation.
+                - Preprocessed BGR image of shape (H, W, 3) used for
+                  brightness analysis in ``compute_attention_ratio``.
         """
         processed = self.preprocessor_a.process_image(img_bgr)
         img_rgb = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
@@ -518,7 +631,21 @@ class EnsemblePredictor:
         return probs, tensor, processed
 
     def _predict_model_b(self, img_bgr: np.ndarray) -> np.ndarray:
-        """Predicción con Model B (tissue-only multi-crop)."""
+        """
+        Run Model B on a BGR image using multi-crop averaging.
+
+        The image is processed by ``preprocessor_b`` to produce ``n_crops``
+        tissue-only crops. Each crop is forwarded independently through
+        Model B with temperature scaling, and the resulting probability
+        vectors are averaged.
+
+        Args:
+            img_bgr (np.ndarray): Raw BGR input image of shape (H, W, 3).
+
+        Returns:
+            np.ndarray: Averaged softmax probability vector of shape
+                (num_classes,).
+        """
         crops_bgr = self.preprocessor_b.process_image(img_bgr)
 
         self.model_b.eval()
@@ -536,7 +663,7 @@ class EnsemblePredictor:
         return np.mean(all_probs, axis=0)
 
     # ═════════════════════════════════════════════
-    #  BATCH PREDICTION (para evaluación)
+    #  BATCH PREDICTION (for evaluation)
     # ═════════════════════════════════════════════
 
     def predict_batch_from_preprocessed(
@@ -547,9 +674,44 @@ class EnsemblePredictor:
         batch_size: int = 16,
         n_crops: int = 5,
     ) -> dict:
-        """Predicción batch con pesos fijos (para evaluación rápida)."""
+        """
+        Run batch ensemble inference with fixed base weights.
 
-        logger.info("  Model A predicciones...")
+        Designed for fast evaluation over a pre-processed dataset. Does not
+        compute Grad-CAM or adaptive weights; uses ``alpha_base`` and
+        ``beta_base`` directly.
+
+        Model A predictions are obtained from a standard ``ColonoscopyDataset``
+        loader. Model B predictions are obtained via multi-crop averaging
+        through ``validate_multicrop``.
+
+        Args:
+            test_paths (list[str]): Absolute paths to the test images.
+            test_labels (list[int]): Ground-truth integer labels aligned
+                with ``test_paths``.
+            image_size (int): Spatial resolution used when building
+                datasets. Default is 384.
+            batch_size (int): Number of samples per forward-pass batch for
+                Model A. Model B uses ``batch_size * 2``. Default is 16.
+            n_crops (int): Number of tissue-only crop variants per image
+                for Model B. Default is 5.
+
+        Returns:
+            dict: Evaluation metrics and raw outputs with the following
+                keys:
+                - ``"accuracy"`` (float): Overall accuracy.
+                - ``"f1"`` (float): Macro-averaged F1 score.
+                - ``"precision"`` (float): Macro-averaged precision.
+                - ``"recall"`` (float): Macro-averaged recall.
+                - ``"auc"`` (float): Macro one-vs-rest ROC AUC.
+                - ``"predictions"`` (np.ndarray): Predicted class per image.
+                - ``"labels"`` (np.ndarray): Ground-truth labels.
+                - ``"probabilities"`` (np.ndarray): Combined probability
+                  matrix of shape (N, num_classes).
+                - ``"probs_a"`` (np.ndarray): Model A probability matrix.
+                - ``"probs_b"`` (np.ndarray): Model B probability matrix.
+        """
+        logger.info("  Model A predictions...")
         test_ds_a = ColonoscopyDataset(
             test_paths,
             test_labels,
@@ -578,7 +740,7 @@ class EnsemblePredictor:
 
         probs_b_all = probs_a_all
         if self.model_b is not None:
-            logger.info("  Model B predicciones (multi-crop)...")
+            logger.info("  Model B predictions (multi-crop)...")
 
             crop_ds = TissueCropDataset(
                 test_paths,
@@ -600,7 +762,7 @@ class EnsemblePredictor:
             )
             probs_b_all = m_b["probabilities"]
 
-        logger.info("  Combinando ensemble...")
+        logger.info("  Combining ensemble...")
         n = min(len(probs_a_all), len(probs_b_all))
         probs_a_all = probs_a_all[:n]
         probs_b_all = probs_b_all[:n]
@@ -632,7 +794,7 @@ class EnsemblePredictor:
         }
 
     # ═════════════════════════════════════════════
-    #  OPTIMIZACIÓN
+    #  OPTIMISATION
     # ═════════════════════════════════════════════
 
     def optimize_weights(
@@ -643,9 +805,32 @@ class EnsemblePredictor:
         n_crops: int = 5,
         metric: str = "f1",
     ) -> tuple[float, float]:
-        """Grid search de pesos base en validation set."""
+        """
+        Find the optimal fixed base weights via grid search on the
+        validation set.
 
-        logger.info("\n═══ OPTIMIZANDO PESOS BASE ═══")
+        Evaluates all combinations of ``alpha`` in [0.0, 1.0] with step
+        0.05, selecting the pair that maximises the specified metric. The
+        best weights are stored in ``self.alpha_base`` and
+        ``self.beta_base`` and persisted to disk via
+        ``_save_ensemble_config``.
+
+        Args:
+            val_paths (list[str]): Absolute paths to validation images.
+            val_labels (list[int]): Ground-truth labels aligned with
+                ``val_paths``.
+            image_size (int): Spatial resolution used for the validation
+                datasets. Default is 384.
+            n_crops (int): Number of tissue-only crop variants per image
+                for Model B. Default is 5.
+            metric (str): Optimisation target. One of ``"f1"``,
+                ``"recall"``, or ``"accuracy"``. Default is ``"f1"``.
+
+        Returns:
+            tuple[float, float]: ``(alpha_base, beta_base)`` — the optimal
+                base weights found by grid search.
+        """
+        logger.info("\n═══ OPTIMISING BASE WEIGHTS ═══")
 
         val_ds_a = ColonoscopyDataset(
             val_paths,
@@ -726,14 +911,21 @@ class EnsemblePredictor:
             )
 
         logger.info(
-            f"\n  ✅ ÓPTIMO: α_base={self.alpha_base:.2f}, β_base={self.beta_base:.2f}"
+            f"\n  ✅ OPTIMAL: α_base={self.alpha_base:.2f}, β_base={self.beta_base:.2f}"
         )
 
         self._save_ensemble_config()
         return self.alpha_base, self.beta_base
 
     def _save_ensemble_config(self):
-        """Guarda configuración del ensemble."""
+        """
+        Persist the current ensemble configuration to a JSON file.
+
+        Writes all adaptive parameters (base weights, sigmoid settings,
+        temperature values, and checkpoint file names) to
+        ``paths.ENSEMBLE_CONFIG_PATH``. The parent directory is created
+        if it does not exist.
+        """
         config = {
             "alpha": round(self.alpha_base, 4),
             "beta": round(self.beta_base, 4),
@@ -754,4 +946,4 @@ class EnsemblePredictor:
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
-        logger.info(f"  💾 Config: {config_path}")
+        logger.info(f"  💾 Config saved: {config_path}")

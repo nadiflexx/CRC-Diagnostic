@@ -28,12 +28,28 @@ from src.config.logger import log as logger
 
 
 class TabularPreprocessor:
+    """
+    Clinical tabular data preprocessor.
+
+    Handles cleaning of GDC and Kaggle source formats, feature
+    engineering, fitting of scalers and label encoders, and
+    serialisation/deserialisation of the fitted state. Supports both
+    ``fit_transform`` (training) and ``transform`` (inference) workflows.
+    """
+
     NUMERIC_FEATURES = NUMERIC_FEATURES
     CATEGORICAL_FEATURES = CATEGORICAL_FEATURES
     BINARY_FEATURES = BINARY_FEATURES
     TARGET = TABULAR_TARGET
 
     def __init__(self):
+        """
+        Initialise the preprocessor with unfitted scalers and encoders.
+
+        All state (``scaler``, ``label_encoders``, ``feature_names``) is
+        populated during ``fit_transform`` and can be persisted via
+        ``save``.
+        """
         self.scaler = StandardScaler()
         self.label_encoders = {}
         self.feature_names = []
@@ -41,10 +57,27 @@ class TabularPreprocessor:
 
     def clean_gdc_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Clean GDC clinical data.
+        Harmonise a raw GDC clinical DataFrame to the canonical schema.
 
-        :param df: Input DataFrame containing GDC clinical data.
-        :return: Cleaned DataFrame.
+        Maps GDC-specific column names and value vocabularies to the
+        project's unified feature set. Missing columns are filled with
+        sensible defaults (``np.nan`` for numeric, ``"unknown"`` for
+        categorical). The ``has_cancer`` flag is set to ``True`` for all
+        GDC rows (all records are cancer cases).
+
+        Args:
+            df (pd.DataFrame): Raw GDC clinical data. Expected columns
+                include (but are not limited to): ``age_at_index``,
+                ``gender``, ``bmi``, ``race``,
+                ``tobacco_smoking_status``, ``alcohol_history``,
+                ``pack_years_smoked``, and ``ajcc_stage``.
+
+        Returns:
+            pd.DataFrame: Cleaned DataFrame with the canonical columns:
+                ``age``, ``gender``, ``bmi``, ``ethnicity``,
+                ``smoking_status``, ``alcohol_consumption``,
+                ``pack_years_smoked``, ``ajcc_stage``, and
+                ``has_cancer``.
         """
         cleaned = pd.DataFrame()
 
@@ -110,10 +143,27 @@ class TabularPreprocessor:
 
     def clean_kaggle_risk_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Clean Kaggle risk factor data.
+        Harmonise a raw Kaggle risk-factor DataFrame to the canonical schema.
 
-        :param df: Input DataFrame containing Kaggle risk factor data.
-        :return: Cleaned DataFrame.
+        Maps Kaggle column names and categorical value strings to the
+        unified vocabulary using the constants defined in
+        ``src.config.constants``. Optionally extracts staging,
+        aggressiveness, and survival information when present.
+
+        Args:
+            df (pd.DataFrame): Raw Kaggle risk-factor data. Expected
+                columns include: ``Age``, ``Gender``, ``Race``, ``BMI``,
+                ``Smoking_Status``, ``Alcohol_Consumption``,
+                ``Physical_Activity_Level``, ``Diet_Type``,
+                ``Family_History``, ``Previous_Cancer_History``, and
+                optionally ``Stage_at_Diagnosis``,
+                ``Tumor_Aggressiveness``, and ``Survival_Status``.
+
+        Returns:
+            pd.DataFrame: Cleaned DataFrame with the canonical columns
+                plus optional columns ``cancer_stage``,
+                ``cancer_stage_numeric``, ``tumor_aggressiveness``, and
+                ``survived`` when the source columns are present.
         """
         cleaned = pd.DataFrame()
 
@@ -183,10 +233,20 @@ class TabularPreprocessor:
 
     def merge_datasets(self, *dataframes: pd.DataFrame) -> pd.DataFrame:
         """
-        Merge multiple DataFrames into a single DataFrame.
+        Concatenate multiple cleaned DataFrames into a single unified frame.
 
-        :param dataframes: Variable number of DataFrames to merge.
-        :return: Merged DataFrame.
+        Uses ``pd.concat`` with ``ignore_index=True`` and ``sort=False``
+        to preserve column order. The ``has_cancer`` column is coerced to
+        boolean after merging, with ``NaN`` treated as ``False``.
+
+        Args:
+            *dataframes (pd.DataFrame): One or more DataFrames to merge.
+                All should share the canonical column schema produced by
+                the cleaning methods.
+
+        Returns:
+            pd.DataFrame: Single concatenated DataFrame with a reset
+                integer index.
         """
         logger.info(f"Merging {len(dataframes)} datasets")
         combined = pd.concat(dataframes, ignore_index=True, sort=False)
@@ -197,10 +257,24 @@ class TabularPreprocessor:
 
     def engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Engineer new features based on existing columns.
+        Derive compound clinical features from existing columns.
 
-        :param df: Input DataFrame.
-        :return: DataFrame with engineered features.
+        Creates the following derived features when the required source
+        columns are present:
+            - ``hb_hct_ratio``: haemoglobin / haematocrit.
+            - ``cea_albumin_ratio``: CEA / albumin.
+            - ``inflammation_index``: log1p(CRP × WBC count).
+            - ``iron_store_ratio``: ferritin / serum iron.
+            - ``age_bmi_interaction``: (age / 100) × (BMI / 40).
+            - ``{col}_log``: log1p transformation for ``cea``,
+              ``ca19_9``, ``crp``, and ``ferritin``.
+
+        Args:
+            df (pd.DataFrame): DataFrame with canonical clinical columns.
+
+        Returns:
+            pd.DataFrame: Copy of ``df`` with additional derived feature
+                columns appended. Original columns are unchanged.
         """
         df = df.copy()
         if "hemoglobin" in df.columns and "hematocrit" in df.columns:
@@ -222,10 +296,34 @@ class TabularPreprocessor:
         self, df: pd.DataFrame
     ) -> tuple[np.ndarray, np.ndarray | None, list[str]]:
         """
-        Fit and transform the data.
+        Fit all transformers on ``df`` and return the transformed feature matrix.
 
-        :param df: Input DataFrame.
-        :return: Tuple of transformed features, target values, and feature names.
+        Processing steps:
+            1. Engineer derived features.
+            2. Separate the target column ``has_cancer`` if present.
+            3. Identify numeric, categorical, and binary feature columns.
+            4. Impute numeric features with KNN (k=5) then scale with
+               ``StandardScaler``.
+            5. Encode categorical features with per-column
+               ``LabelEncoder`` instances stored in
+               ``self.label_encoders``.
+            6. Cast binary features to int.
+            7. Horizontally stack all feature groups.
+
+        After this call ``self._fitted`` is ``True`` and ``transform``
+        can be used for new data.
+
+        Args:
+            df (pd.DataFrame): Input DataFrame containing both features
+                and the target column.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray | None, list[str]]:
+                - ``X``: Feature matrix of shape (n_samples, n_features).
+                - ``y``: Integer target array of shape (n_samples,), or
+                  ``None`` if ``has_cancer`` is not in ``df``.
+                - ``feature_names``: Ordered list of feature names
+                  corresponding to columns of ``X``.
         """
         df = self.engineer_features(df)
         y = (
@@ -281,10 +379,25 @@ class TabularPreprocessor:
 
     def transform(self, df: pd.DataFrame) -> np.ndarray:
         """
-        Transform the data.
+        Apply the fitted transformers to new data without refitting.
 
-        :param df: Input DataFrame.
-        :return: Transformed features.
+        Uses the ``StandardScaler`` and ``LabelEncoder`` instances fitted
+        during ``fit_transform``. Unseen categorical values are mapped to
+        ``-1`` to avoid errors. Missing numeric values are filled with 0
+        before scaling.
+
+        Args:
+            df (pd.DataFrame): Input DataFrame with the same column
+                structure used during ``fit_transform``.
+
+        Returns:
+            np.ndarray: Transformed feature matrix of shape
+                (n_samples, n_features) matching the column order of
+                ``self.feature_names``.
+
+        Raises:
+            RuntimeError: If ``fit_transform`` has not been called before
+                this method.
         """
         if not self._fitted:
             raise RuntimeError("Preprocessor not fitted. Call fit_transform first.")
@@ -323,9 +436,14 @@ class TabularPreprocessor:
 
     def save(self, path: Path):
         """
-        Save the preprocessor.
+        Serialise the fitted preprocessor state to disk using joblib.
 
-        :param path: Path to save the preprocessor.
+        Saves the ``StandardScaler``, per-column ``LabelEncoder``
+        instances, and the ordered feature name list so the preprocessor
+        can be fully restored via ``load`` without refitting.
+
+        Args:
+            path (Path): Destination file path for the serialised state.
         """
         joblib.dump(
             {
@@ -340,10 +458,15 @@ class TabularPreprocessor:
     @classmethod
     def load(cls, path: Path) -> "TabularPreprocessor":
         """
-        Load the preprocessor.
+        Deserialise a previously saved ``TabularPreprocessor``.
 
-        :param path: Path to load the preprocessor from.
-        :return: Loaded preprocessor.
+        Args:
+            path (Path): Path to the joblib file produced by ``save``.
+
+        Returns:
+            TabularPreprocessor: Fully restored preprocessor instance
+                with ``_fitted`` set to ``True``, ready to call
+                ``transform`` on new data.
         """
         state = joblib.load(path)
         p = cls()

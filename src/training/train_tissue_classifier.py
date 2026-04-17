@@ -1,13 +1,13 @@
 """
 src/training/train_tissue_classifier.py
 
-Entrenamiento del Modelo B (Tissue-Only) con EfficientNetV2-S.
-MISMO backbone que Model A. Diversidad = preprocesamiento diferente.
+Training pipeline for Model B (Tissue-Only) using EfficientNetV2-S.
+SAME backbone as Model A. Diversity is achieved through different preprocessing.
 
-Estrategia:
-  - Training: selección aleatoria de 1 de N crops por imagen/epoch
-  - Validation: promedio de TODOS los crops por imagen
-  - Mismo LR y optimizer que Model A (misma arquitectura)
+Strategy:
+    - Training: random selection of 1 out of N crops per image per epoch.
+    - Validation: average of ALL crops per image.
+    - Same learning rate and optimizer as Model A (same architecture).
 """
 
 from collections import Counter
@@ -49,14 +49,33 @@ from src.training.tracking import MLflowTracker
 
 TISSUE_DIR = paths.COLON_TISSUE_ONLY
 
-
 # ═══════════════════════════════════════════════════════════
-#  TRANSFORMS
+# TRANSFORMS
 # ═══════════════════════════════════════════════════════════
 
 
 def get_tissue_train_transforms(image_size: int = 384) -> A.Compose:
-    """Augmentation reducida (multi-crop ya da variabilidad)."""
+    """
+    Build the training augmentation pipeline for tissue-only crops.
+
+    Augmentation is intentionally reduced because multi-crop sampling
+    already provides sufficient variability during training.
+
+    Args:
+        image_size (int): Target spatial resolution. Default is 384.
+            Currently unused in the transform body (crops are already
+            resized during preprocessing), but kept for API consistency.
+
+    Returns:
+        A.Compose: Albumentations composition with the following steps:
+            - Random rotation up to 15 degrees (p=0.4).
+            - Horizontal flip (p=0.5).
+            - Vertical flip (p=0.5).
+            - One-of: brightness/contrast or hue/saturation jitter (p=0.5).
+            - Gaussian blur with kernel (3, 5) (p=0.2).
+            - ImageNet normalization.
+            - Conversion to PyTorch tensor.
+    """
     return A.Compose(
         [
             A.Rotate(
@@ -90,6 +109,21 @@ def get_tissue_train_transforms(image_size: int = 384) -> A.Compose:
 
 
 def get_tissue_val_transforms(image_size: int = 384) -> A.Compose:
+    """
+    Build the validation/test transform pipeline for tissue-only crops.
+
+    No geometric or color augmentation is applied. Only normalization
+    and tensor conversion are performed to ensure deterministic evaluation.
+
+    Args:
+        image_size (int): Target spatial resolution. Default is 384.
+            Kept for API consistency with the training counterpart.
+
+    Returns:
+        A.Compose: Albumentations composition containing:
+            - ImageNet normalization.
+            - Conversion to PyTorch tensor.
+    """
     return A.Compose(
         [
             A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
@@ -99,12 +133,19 @@ def get_tissue_val_transforms(image_size: int = 384) -> A.Compose:
 
 
 # ═══════════════════════════════════════════════════════════
-#  DATASETS
+# DATASETS
 # ═══════════════════════════════════════════════════════════
 
 
 class TissueTrainDataset(Dataset):
-    """1 crop aleatorio por imagen por epoch."""
+    """
+    Training dataset that selects one random crop per image per epoch.
+
+    For each original image, up to ``n_crops`` pre-generated tissue-only
+    crop files are discovered. At every ``__getitem__`` call a single crop
+    is chosen at random, introducing stochasticity without storing all
+    crops in memory simultaneously.
+    """
 
     def __init__(
         self,
@@ -115,6 +156,25 @@ class TissueTrainDataset(Dataset):
         image_size: int = 384,
         n_crops: int = 5,
     ):
+        """
+        Initialize the training dataset by discovering crop files on disk.
+
+        Args:
+            db_paths (list[str]): Absolute paths to the original images
+                as stored in the database. Used to derive crop filenames.
+            labels (list[int]): Integer class label for each entry in
+                ``db_paths`` (must be the same length and order).
+            tissue_dir (Path): Root directory that contains tissue-only
+                crop subdirectories organized by class name.
+            transform (A.Compose): Albumentations augmentation pipeline
+                applied to each loaded crop.
+            image_size (int): Expected spatial size (height and width) of
+                each crop in pixels. Crops that deviate are resized.
+                Default is 384.
+            n_crops (int): Maximum number of crop variants expected per
+                image (``_crop0.jpg`` … ``_crop{n_crops-1}.jpg``).
+                Default is 5.
+        """
         self.transform = transform
         self.image_size = image_size
         self.records: list[dict] = []
@@ -138,13 +198,30 @@ class TissueTrainDataset(Dataset):
         if missing > 0:
             logger.warning(
                 f"  ⚠️  {missing}/{missing + len(self.records)} "
-                f"imágenes sin tissue-only crops"
+                f"images without tissue-only crops"
             )
 
     def __len__(self) -> int:
+        """
+        Return the number of images (parent records) in the dataset.
+
+        Returns:
+            int: Total number of records with at least one valid crop.
+        """
         return len(self.records)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        """
+        Load and return one randomly chosen crop for the image at ``idx``.
+
+        Args:
+            idx (int): Index into ``self.records``.
+
+        Returns:
+            tuple[torch.Tensor, int]:
+                - Transformed image tensor of shape (C, H, W).
+                - Integer class label.
+        """
         record = self.records[idx]
         crop_path = random.choice(record["crop_paths"])
 
@@ -167,7 +244,14 @@ class TissueTrainDataset(Dataset):
 
 
 class TissueCropDataset(Dataset):
-    """Dataset FLAT para validación multi-crop."""
+    """
+    Flat validation dataset that exposes every crop as an individual sample.
+
+    All crops for every parent image are enumerated and stored as separate
+    entries. Each entry carries a ``parent_idx`` field that links it back
+    to the originating image, enabling multi-crop averaging during
+    validation.
+    """
 
     def __init__(
         self,
@@ -178,6 +262,23 @@ class TissueCropDataset(Dataset):
         image_size: int = 384,
         n_crops: int = 5,
     ):
+        """
+        Initialize the flat crop dataset by scanning all crop files on disk.
+
+        Args:
+            db_paths (list[str]): Absolute paths to the original images
+                as stored in the database.
+            labels (list[int]): Integer class label aligned with
+                ``db_paths``.
+            tissue_dir (Path): Root directory containing tissue-only crop
+                subdirectories organized by class name.
+            transform (A.Compose): Albumentations pipeline applied to
+                each crop before returning it.
+            image_size (int): Expected spatial size of each crop in pixels.
+                Crops that deviate are resized. Default is 384.
+            n_crops (int): Maximum number of crop variants expected per
+                image. Default is 5.
+        """
         self.transform = transform
         self.image_size = image_size
         self.entries: list[dict] = []
@@ -206,9 +307,27 @@ class TissueCropDataset(Dataset):
                 self.n_parents = parent_idx + 1
 
     def __len__(self) -> int:
+        """
+        Return the total number of individual crop entries.
+
+        Returns:
+            int: Number of crop files discovered across all parent images.
+        """
         return len(self.entries)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int, int]:
+        """
+        Load and return the crop at position ``idx``.
+
+        Args:
+            idx (int): Index into ``self.entries``.
+
+        Returns:
+            tuple[torch.Tensor, int, int]:
+                - Transformed image tensor of shape (C, H, W).
+                - Integer class label of the parent image.
+                - Parent image index used for multi-crop aggregation.
+        """
         entry = self.entries[idx]
 
         img = cv2.imread(entry["crop_path"])
@@ -228,7 +347,7 @@ class TissueCropDataset(Dataset):
 
 
 # ═══════════════════════════════════════════════════════════
-#  MULTI-CROP VALIDATION
+# MULTI-CROP VALIDATION
 # ═══════════════════════════════════════════════════════════
 
 
@@ -240,7 +359,43 @@ def validate_multicrop(
     temperature: float = 1.0,
     batch_size: int = 32,
 ) -> dict:
-    """Validación con promedio multi-crop."""
+    """
+    Evaluate the model using multi-crop averaging per parent image.
+
+    All crops belonging to the same parent image are forwarded through
+    the model individually. Their softmax probability vectors are then
+    averaged to produce a single prediction per image, reducing variance
+    caused by crop position.
+
+    Args:
+        model (TissueOnlyClassifier): The model to evaluate. Set to eval
+            mode internally.
+        crop_dataset (TissueCropDataset): Flat dataset containing all
+            crops with their associated ``parent_idx`` fields.
+        criterion (torch.nn.Module): Loss function used to compute the
+            reported validation loss (applied per batch before averaging).
+        device (str): Target device identifier, e.g. ``"cuda"`` or
+            ``"cpu"``.
+        temperature (float): Temperature scaling factor applied to logits
+            before the softmax. Values greater than 1 soften predictions.
+            Default is 1.0 (no scaling).
+        batch_size (int): Number of crops per forward pass. Default is 32.
+
+    Returns:
+        dict: Dictionary with the following keys:
+            - ``"loss"`` (float): Average batch loss over all crops.
+            - ``"accuracy"`` (float): Image-level accuracy after averaging.
+            - ``"f1"`` (float): Macro-averaged F1 score.
+            - ``"precision"`` (float): Macro-averaged precision.
+            - ``"recall"`` (float): Macro-averaged recall.
+            - ``"auc"`` (float): Macro one-vs-rest ROC AUC score.
+            - ``"predictions"`` (np.ndarray): Predicted class per image.
+            - ``"labels"`` (np.ndarray): Ground-truth label per image.
+            - ``"probabilities"`` (np.ndarray): Averaged probability
+              vectors, shape (n_images, n_classes).
+            - ``"n_images"`` (int): Number of unique parent images.
+            - ``"n_crops"`` (int): Total number of crops processed.
+    """
     model.eval()
 
     is_win = platform.system() == "Windows"
@@ -314,14 +469,21 @@ def validate_multicrop(
 
 
 # ═══════════════════════════════════════════════════════════
-#  TEMPERATURE SCALING
+# TEMPERATURE SCALING
 # ═══════════════════════════════════════════════════════════
 
 
 class TemperatureScalerB:
-    """Temperature scaling para Model B."""
+    """
+    Post-hoc temperature scaling calibrator for Model B.
+
+    Performs a grid search over temperature values to find the one that
+    minimises negative log-likelihood on multi-crop averaged logits from
+    the validation set.
+    """
 
     def __init__(self):
+        """Initialise with temperature set to 1.0 (identity scaling)."""
         self.temperature = 1.0
 
     def fit(
@@ -331,6 +493,27 @@ class TemperatureScalerB:
         device: str,
         batch_size: int = 32,
     ) -> float:
+        """
+        Find the optimal temperature by minimising NLL on the validation set.
+
+        Logits from all crops are first collected, then averaged per parent
+        image, and finally a grid search over [0.5, 5.0) with step 0.1 is
+        performed to select the temperature that yields the lowest cross-
+        entropy loss.
+
+        Args:
+            model (TissueOnlyClassifier): Trained model used to collect
+                logits. Set to eval mode internally.
+            crop_dataset (TissueCropDataset): Flat validation crop dataset
+                that provides ``parent_idx`` for aggregation.
+            device (str): Target device identifier, e.g. ``"cuda"`` or
+                ``"cpu"``.
+            batch_size (int): Number of crops per forward pass. Default is 32.
+
+        Returns:
+            float: The optimal temperature value found by grid search.
+                Also stored in ``self.temperature``.
+        """
         model.eval()
 
         is_win = platform.system() == "Windows"
@@ -378,23 +561,38 @@ class TemperatureScalerB:
                 best_t = float(t)
 
         self.temperature = best_t
-        logger.info(f"  🌡️  Temperatura óptima (Model B): {self.temperature:.2f}")
+        logger.info(f"  🌡️  Optimal temperature (Model B): {self.temperature:.2f}")
         return self.temperature
 
 
 # ═══════════════════════════════════════════════════════════
-#  TRAINER
+# TRAINER
 # ═══════════════════════════════════════════════════════════
 
 
 class TissueClassifierTrainer:
-    """Trainer para Model B tissue-only (MISMO backbone que Model A)."""
+    """
+    Training orchestrator for Model B (tissue-only, same backbone as Model A).
+
+    Handles the full pipeline: preprocessing verification, data loading from
+    the database, dataset construction, training loop with early stopping,
+    temperature calibration, test evaluation, and checkpoint management.
+    """
 
     def __init__(
         self,
         model_name: str = "tf_efficientnetv2_s.in21k",
         device: str | None = None,
     ):
+        """
+        Initialise the trainer and instantiate the model.
+
+        Args:
+            model_name (str): Timm model identifier for the backbone.
+                Default is ``"tf_efficientnetv2_s.in21k"``.
+            device (str | None): Target device. If ``None``, CUDA is used
+                when available, otherwise CPU.
+        """
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model_name = model_name
         self.tissue_dir = TISSUE_DIR
@@ -404,8 +602,10 @@ class TissueClassifierTrainer:
         self.num_classes = self.class_mapping["num_classes"]
         self.class_names = {int(k): v for k, v in self.class_mapping["classes"].items()}
 
-        logger.info(f"  Modelo B: {model_name} (MISMO que Model A)")
-        logger.info(f"  Clases ({self.num_classes}): {list(self.class_names.values())}")
+        logger.info(f"  Model B: {model_name} (SAME as Model A)")
+        logger.info(
+            f"  Classes ({self.num_classes}): {list(self.class_names.values())}"
+        )
 
         self.model = TissueOnlyClassifier(
             model_name=model_name,
@@ -432,6 +632,22 @@ class TissueClassifierTrainer:
         }
 
     def _load_class_mapping(self) -> dict:
+        """
+        Load the class mapping JSON from the first path that exists.
+
+        Searches in the following order:
+            1. ``TISSUE_DIR / class_mapping.json``
+            2. ``paths.COLON_PROCESSED / class_mapping.json``
+            3. ``paths.COLON_CLEAN / class_mapping.json``
+
+        Returns:
+            dict: Parsed class mapping containing at least
+                ``"num_classes"`` and ``"classes"`` keys.
+
+        Raises:
+            FileNotFoundError: If no ``class_mapping.json`` is found in
+                any of the candidate paths.
+        """
         for p in [
             TISSUE_DIR / "class_mapping.json",
             paths.COLON_PROCESSED / "class_mapping.json",
@@ -442,17 +658,25 @@ class TissueClassifierTrainer:
                     mapping = json.load(f)
                 logger.info(f"  📄 class_mapping: {p}")
                 return mapping
-        raise FileNotFoundError("class_mapping.json no encontrado.")
+        raise FileNotFoundError("class_mapping.json not found.")
 
     def _ensure_tissue_preprocessing(self):
+        """
+        Verify that tissue-only crops exist and run preprocessing if they do not.
+
+        If ``TISSUE_DIR`` is non-empty the method logs the number of crops
+        found and returns immediately. Otherwise it triggers
+        ``process_dataset_tissue_only`` to generate the crops from the clean
+        dataset.
+        """
         if self.tissue_dir.exists() and any(self.tissue_dir.iterdir()):
             n = sum(
                 1 for _ in self.tissue_dir.rglob("*.jpg") if _.parent.name != "masks"
             )
-            logger.info(f"  ✅ Tissue-only ya existe: {n} crops")
+            logger.info(f"  ✅ Tissue-only already exists: {n} crops")
             return
 
-        logger.info("  🔄 Ejecutando preprocesamiento tissue-only...")
+        logger.info("  🔄 Running tissue-only preprocessing...")
         process_dataset_tissue_only(
             clean_dir=paths.COLON_CLEAN,
             processed_dir=self.tissue_dir,
@@ -461,6 +685,22 @@ class TissueClassifierTrainer:
         )
 
     def _load_data_from_db(self) -> dict:
+        """
+        Load train, validation, and test splits from the database.
+
+        Also validates that at least one tissue crop exists for a sample
+        image before returning, to catch missing preprocessing early.
+
+        Returns:
+            dict: Dictionary with keys ``"train"``, ``"val"``, and
+                ``"test"``. Each value is a tuple
+                ``(paths: list[str], labels: list[int])``.
+
+        Raises:
+            ValueError: If no training images are found in the database.
+            FileNotFoundError: If the expected tissue crop file for the
+                first training image does not exist on disk.
+        """
         with get_db() as db:
             repo = TrainingImageRepository(db)
 
@@ -477,7 +717,7 @@ class TissueClassifierTrainer:
             test_labels = [int(d.label) for d in test_data]
 
         if not train_paths:
-            raise ValueError("Sin datos de entrenamiento en DB.")
+            raise ValueError("No training data found in the database.")
 
         result = {
             "train": (train_paths, train_labels),
@@ -492,8 +732,8 @@ class TissueClassifierTrainer:
 
         if not test_crop.exists():
             raise FileNotFoundError(
-                f"No se encontró tissue crop: {test_crop}\n"
-                f"Ejecuta: python -m src.data_processing."
+                f"Tissue crop not found: {test_crop}\n"
+                f"Run: python -m src.data_processing."
                 f"tissue_only_preprocessor"
             )
 
@@ -503,7 +743,7 @@ class TissueClassifierTrainer:
             detail = ", ".join(
                 f"{self.class_names.get(k, '?')}={v}" for k, v in sorted(counts.items())
             )
-            logger.info(f"  {split}: {len(labels)} imágenes ({detail})")
+            logger.info(f"  {split}: {len(labels)} images ({detail})")
 
         return result
 
@@ -515,6 +755,31 @@ class TissueClassifierTrainer:
         image_size: int = 384,
         n_crops: int = 5,
     ):
+        """
+        Run the full training pipeline for the tissue-only classifier.
+
+        Steps performed:
+            1. Ensure tissue-only crops exist on disk.
+            2. Start an MLflow run and log hyperparameters.
+            3. Load data splits from the database.
+            4. Compute balanced class weights.
+            5. Build datasets and data loaders.
+            6. Instantiate FocalLoss, AdamW optimiser, and cosine scheduler.
+            7. Execute the training loop with early stopping.
+            8. Calibrate the model via temperature scaling.
+            9. Evaluate on the test set if available.
+            10. Log the model artifact to MLflow.
+
+        Args:
+            epochs (int): Maximum number of training epochs. Default is 25.
+            batch_size (int): Number of samples per training batch.
+                Default is 16.
+            lr (float): Initial learning rate for AdamW. Default is 1e-4.
+            image_size (int): Spatial resolution of the input crops in
+                pixels. Default is 384.
+            n_crops (int): Number of crop variants per image used to
+                build the datasets. Default is 5.
+        """
         self._ensure_tissue_preprocessing()
 
         with self.tracker.start_run(f"tissue_only_{self.model_name}"):
@@ -534,7 +799,7 @@ class TissueClassifierTrainer:
                 }
             )
 
-            logger.info("\n═══ CARGANDO DATOS (TISSUE-ONLY) ═══")
+            logger.info("\n═══ LOADING DATA (TISSUE-ONLY) ═══")
             data = self._load_data_from_db()
             train_paths, train_labels = data["train"]
             val_paths, val_labels = data["val"]
@@ -565,9 +830,9 @@ class TissueClassifierTrainer:
                 n_crops=n_crops,
             )
 
-            logger.info(f"  Train: {len(train_ds)} imágenes (random crop de {n_crops})")
+            logger.info(f"  Train: {len(train_ds)} images (random crop from {n_crops})")
             logger.info(
-                f"  Val: {val_crop_ds.n_parents} imágenes "
+                f"  Val: {val_crop_ds.n_parents} images "
                 f"× {n_crops} crops = {len(val_crop_ds)} crops"
             )
 
@@ -595,11 +860,9 @@ class TissueClassifierTrainer:
                 optimizer, T_0=10, T_mult=2
             )
 
-            logger.info(
-                f"\n═══ ENTRENAMIENTO TISSUE-ONLY ({self.num_classes} CLASES) ═══"
-            )
+            logger.info(f"\n═══ TISSUE-ONLY TRAINING ({self.num_classes} CLASSES) ═══")
             logger.info(f"  Epochs: {epochs} | Batch: {batch_size} | LR: {lr}")
-            logger.info(f"  Backbone: {self.model_name} (MISMO que Model A)")
+            logger.info(f"  Backbone: {self.model_name} (SAME as Model A)")
 
             for epoch in range(epochs):
                 self.model.train()
@@ -631,7 +894,7 @@ class TissueClassifierTrainer:
                         pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
                     except Exception as e:
-                        logger.error(f"  Error batch: {e}")
+                        logger.error(f"  Batch error: {e}")
                         continue
 
                 scheduler.step()
@@ -694,10 +957,10 @@ class TissueClassifierTrainer:
                 )
 
                 if self.patience_counter >= self.max_patience:
-                    logger.info(f"  ⚠️  Early stopping epoch {epoch + 1}")
+                    logger.info(f"  ⚠️  Early stopping at epoch {epoch + 1}")
                     break
 
-            logger.info("\n═══ CALIBRACIÓN (MULTI-CROP) ═══")
+            logger.info("\n═══ CALIBRATION (MULTI-CROP) ═══")
             self._load_best()
             temp = self.temp_scaler.fit(
                 self.model, val_crop_ds, self.device, batch_size * 2
@@ -709,9 +972,23 @@ class TissueClassifierTrainer:
                 self._evaluate_test(data, image_size, n_crops)
 
             self.tracker.log_model(self.model, "tissue_only_classifier")
-            logger.info(f"\n✅ TISSUE-ONLY COMPLETADO. Mejor F1={self.best_f1:.4f}")
+            logger.info(f"\n✅ TISSUE-ONLY COMPLETE. Best F1={self.best_f1:.4f}")
 
     def _evaluate_test(self, data: dict, image_size: int, n_crops: int):
+        """
+        Evaluate the best checkpoint on the test set using multi-crop averaging.
+
+        Loads the best saved checkpoint, builds a ``TissueCropDataset`` for
+        the test split, runs ``validate_multicrop``, logs a per-class
+        classification report and confusion matrix, and prints a breakdown
+        of accuracy per image source.
+
+        Args:
+            data (dict): Data dictionary as returned by ``_load_data_from_db``,
+                containing ``"test"`` key with ``(paths, labels)`` tuple.
+            image_size (int): Spatial resolution expected by the model.
+            n_crops (int): Number of crop variants per test image.
+        """
         logger.info("\n" + "=" * 70)
         logger.info("TEST SET - MODEL B (TISSUE-ONLY)")
         logger.info("=" * 70)
@@ -760,7 +1037,7 @@ class TissueClassifierTrainer:
         for i, row in enumerate(cm):
             logger.info(f"  {names[i][:12]:>12s} " + " ".join(f"{v:12d}" for v in row))
 
-        logger.info("\n  📊 ANÁLISIS POR FUENTE:")
+        logger.info("\n  📊 ANALYSIS BY SOURCE:")
         source_results: dict[str, dict] = {}
         for idx, p in enumerate(test_paths):
             source = detect_source_from_stem(Path(p).stem)
@@ -781,6 +1058,20 @@ class TissueClassifierTrainer:
         logger.info("=" * 70)
 
     def _save_checkpoint(self, epoch: int, metrics: dict):
+        """
+        Persist the current model state to disk as the best checkpoint.
+
+        Saves model weights, metadata, and scalar metrics (excluding arrays)
+        to ``paths.TISSUE_CLASSIFIER_CHECKPOINT``.
+
+        Args:
+            epoch (int): Zero-based epoch index at which this checkpoint was
+                produced.
+            metrics (dict): Validation metrics dictionary as returned by
+                ``validate_multicrop``. Array fields (``"predictions"``,
+                ``"labels"``, ``"probabilities"``) are excluded from the
+                saved file.
+        """
         path = paths.TISSUE_CLASSIFIER_CHECKPOINT
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -806,9 +1097,18 @@ class TissueClassifierTrainer:
             },
             path,
         )
-        logger.info(f"  💾 Checkpoint: {path}")
+        logger.info(f"  💾 Checkpoint saved: {path}")
 
     def _update_checkpoint_temperature(self, temperature: float):
+        """
+        Update the temperature field in an existing checkpoint file.
+
+        Loads the checkpoint, overwrites the ``"temperature"`` key, and
+        saves it back to the same path.
+
+        Args:
+            temperature (float): Calibrated temperature value to store.
+        """
         path = paths.TISSUE_CLASSIFIER_CHECKPOINT
         if path.exists():
             ckpt = torch.load(path, map_location=self.device, weights_only=False)
@@ -816,16 +1116,23 @@ class TissueClassifierTrainer:
             torch.save(ckpt, path)
 
     def _load_best(self):
+        """
+        Restore model weights from the best saved checkpoint.
+
+        Also restores the temperature value to ``self.temp_scaler.temperature``
+        if it is present in the checkpoint. Logs a warning if no checkpoint
+        file is found.
+        """
         path = paths.TISSUE_CLASSIFIER_CHECKPOINT
         if not path.exists():
-            logger.warning("No se encontró checkpoint tissue-only")
+            logger.warning("No tissue-only checkpoint found.")
             return
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(ckpt["model_state_dict"])
         if "temperature" in ckpt:
             self.temp_scaler.temperature = ckpt["temperature"]
         logger.info(
-            f"  ✅ Cargado tissue-only: "
+            f"  ✅ Tissue-only checkpoint loaded: "
             f"F1={ckpt.get('best_f1', 0):.4f} "
             f"T={ckpt.get('temperature', 1.0):.2f}"
         )
@@ -834,9 +1141,9 @@ class TissueClassifierTrainer:
 if __name__ == "__main__":
     logger.info("=" * 70)
     logger.info("MODEL B: TISSUE-ONLY (EfficientNetV2-S)")
-    logger.info("  MISMO backbone que Model A")
-    logger.info("  Diversidad = preprocesamiento diferente")
-    logger.info("  CERO padding, CERO artefactos de borde")
+    logger.info("  SAME backbone as Model A")
+    logger.info("  Diversity = different preprocessing")
+    logger.info("  ZERO padding, ZERO border artifacts")
     logger.info("=" * 70)
 
     trainer = TissueClassifierTrainer(
