@@ -46,8 +46,16 @@ class PatientOut(PatientCreate):
 
 
 class ClinicalDataIn(BaseModel):
-    """Schema for incoming clinical data."""
+    """
+    Schema for incoming clinical data.
 
+    Supports both legacy fields (old tabular model) and new clinical +
+    radiomic features (ClinicalDataGenerator schema). Legacy fields are
+    kept for backward compatibility with the image-only pipeline and
+    database persistence.
+    """
+
+    # ── Legacy fields (kept for DB persistence & image pipeline) ──
     hemoglobin: float | None = None
     hematocrit: float | None = None
     wbc_count: float | None = None
@@ -61,6 +69,23 @@ class ClinicalDataIn(BaseModel):
     fobt_positive: bool | None = None
     fit_positive: bool | None = None
     notes: str | None = None
+
+    # ── New clinical + radiomic features (ClinicalDataGenerator) ──
+    age_value: float | None = Field(None, description="Patient age (years)")
+    smoking_history: int | None = Field(
+        None, description="Smoking history: 0=No, 1=Yes"
+    )
+    cea_level_ng_ml: float | None = Field(None, description="CEA level (ng/mL)")
+    hemoglobin_g_dl: float | None = Field(None, description="Haemoglobin (g/dL)")
+    pyrad_adc_mean: float | None = Field(None, description="Mean ADC (µm²/s)")
+    pyrad_adc_std: float | None = Field(None, description="ADC standard deviation")
+    pyrad_entropy: float | None = Field(None, description="GLCM Entropy")
+    pyrad_glcm_contrast: float | None = Field(None, description="GLCM Contrast")
+    pyrad_glcm_homogeneity: float | None = Field(None, description="GLCM Homogeneity")
+    pyrad_shape_sphericity: float | None = Field(None, description="Shape Sphericity")
+    pyrad_firstorder_skewness: float | None = Field(
+        None, description="First Order Skewness"
+    )
 
 
 class VisitOut(BaseModel):

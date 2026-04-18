@@ -89,6 +89,8 @@ class Visit(Base):
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"))
     visit_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     notes: Mapped[str | None] = mapped_column(Text)
+
+    # ── Analítica clínica ──────────────────────────────────────────────────
     hemoglobin: Mapped[float | None] = mapped_column(Float)
     hematocrit: Mapped[float | None] = mapped_column(Float)
     wbc_count: Mapped[float | None] = mapped_column(Float)
@@ -101,6 +103,8 @@ class Visit(Base):
     ca19_9: Mapped[float | None] = mapped_column(Float)
     fobt_positive: Mapped[bool | None] = mapped_column(Boolean)
     fit_positive: Mapped[bool | None] = mapped_column(Boolean)
+
+    # ── Endoscopia ────────────────────────────────────────────────────────
     colonoscopy_performed: Mapped[bool] = mapped_column(Boolean, default=False)
     colonoscopy_image_path: Mapped[str | None] = mapped_column(String(500))
     polyps_found: Mapped[bool | None] = mapped_column(Boolean)
@@ -108,6 +112,8 @@ class Visit(Base):
     polyp_max_size_mm: Mapped[float | None] = mapped_column(Float)
     polyp_location: Mapped[str | None] = mapped_column(String(100))
     polyp_morphology: Mapped[str | None] = mapped_column(String(100))
+
+    # ── Scores IA ─────────────────────────────────────────────────────────
     image_prediction_score: Mapped[float | None] = mapped_column(Float)
     tabular_prediction_score: Mapped[float | None] = mapped_column(Float)
     multimodal_prediction_score: Mapped[float | None] = mapped_column(Float)
@@ -115,12 +121,19 @@ class Visit(Base):
         SQLEnum(DiagnosisResultEnum)
     )
     confidence_score: Mapped[float | None] = mapped_column(Float)
+
+    # ── Artefactos IA ─────────────────────────────────────────────────────
     gradcam_image_path: Mapped[str | None] = mapped_column(String(500))
     segmentation_mask_path: Mapped[str | None] = mapped_column(String(500))
-    shap_values: Mapped[dict | None] = mapped_column(JSON)
+
+    # ── JSON compacto con snapshot completo del análisis IA ───────────────
+    ai_snapshot: Mapped[dict | None] = mapped_column(JSON)
+
+    # ── Metadatos ─────────────────────────────────────────────────────────
     risk_factors_detected: Mapped[dict | None] = mapped_column(JSON)
     history_comparison: Mapped[dict | None] = mapped_column(JSON)
     alerts: Mapped[dict | None] = mapped_column(JSON)
+
     patient: Mapped["Patient"] = relationship(back_populates="visits")
 
 

@@ -42,3 +42,23 @@ def build_patient_options(patients: list[dict]) -> dict[str, int]:
         f"{p['first_name']} {p['last_name']}  ·  ID {p['id']}": p["id"]
         for p in patients
     }
+
+
+def get_pil_image_base64(pil_img) -> str:
+    """
+    Convert a PIL Image to a base64 data URI for inline HTML display.
+
+    Args:
+        pil_img: PIL Image object.
+
+    Returns:
+        str: data:image/jpeg;base64,... URI.
+    """
+    import base64
+    import io
+
+    buf = io.BytesIO()
+    pil_img.save(buf, format="JPEG", quality=92)
+    buf.seek(0)
+    encoded = base64.b64encode(buf.read()).decode("utf-8")
+    return f"data:image/jpeg;base64,{encoded}"

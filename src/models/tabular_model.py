@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 
 import joblib
-import lightgbm as lgb
 import numpy as np
+import optuna
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import (
     classification_report,
     confusion_matrix,
@@ -15,25 +16,22 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
     roc_auc_score,
-    roc_curve,
 )
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 import xgboost as xgb
 
 from src.config.logger import log as logger
 
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
 
 class TabularCancerModel:
     """
-    Gradient-boosted tabular classifier optimised for high recall.
+    XGBoost tabular classifier optimised for high recall in CRC screening.
 
-    Supports two backend implementations selectable at construction time:
-        - ``"xgboost"``: XGBoost with AUCPR evaluation and early stopping.
-        - ``"lightgbm"``: LightGBM with early stopping callbacks.
-
-    After training, a per-class decision threshold is optimised on the
-    validation set using Youden's J statistic to maximise sensitivity
-    (recall) while controlling false positives.
+    Uses Optuna Bayesian hyperparameter search and calibrates the decision
+    threshold to guarantee a configurable minimum recall (default 0.90),
+    reflecting the clinical priority of minimising false negatives.
     """
 
     def __init__(self, model_type: str = "xgboost"):
@@ -41,62 +39,120 @@ class TabularCancerModel:
         Initialise the tabular cancer model.
 
         Args:
-            model_type (str): Backend to use. Must be either
-                ``"xgboost"`` or ``"lightgbm"``. Default is
-                ``"xgboost"``.
+            model_type (str): Backend to use. Currently only
+                ``"xgboost"`` is supported. Default is ``"xgboost"``.
         """
         self.model_type = model_type
         self.model: Any = None
         self.feature_names: list[str] | None = None
-        self.best_threshold = 0.3
+        self.best_threshold = 0.5
 
-    def _create_model(self, class_weights: dict[Any, Any] | None = None):
+    # ──────────────────────────────────────────────────────────
+    #  Hyperparameter search
+    # ──────────────────────────────────────────────────────────
+
+    def _optuna_objective(self, trial, X, y) -> float:
         """
-        Instantiate the underlying gradient-boosted model.
-
-        Computes the ``scale_pos_weight`` ratio from ``class_weights`` and
-        applies it to the model constructor so that the minority class
-        receives proportionally higher influence during training.
+        Optuna objective: 5-fold stratified CV ROC-AUC.
 
         Args:
-            class_weights (dict[Any, Any] | None): Dictionary mapping class
-                indices to their weight values. If ``None``, equal weights
-                are assumed (``scale_pos_weight = 1.0``).
+            trial: Optuna trial object.
+            X: Feature matrix.
+            y: Target labels.
+
+        Returns:
+            Mean ROC-AUC across 5 folds.
         """
-        scale_pos = (
-            class_weights.get(1, 1.0) / class_weights.get(0, 1.0)
-            if class_weights
-            else 1.0
+        scale_pos = float((y == 0).sum()) / max(float((y == 1).sum()), 1.0)
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 100, 600),
+            "max_depth": trial.suggest_int("max_depth", 3, 9),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.30, log=True),
+            "subsample": trial.suggest_float("subsample", 0.60, 1.00),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.60, 1.00),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, 10.0, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),
+            "scale_pos_weight": scale_pos,
+            "eval_metric": "auc",
+            "random_state": 42,
+            "n_jobs": -1,
+        }
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        aucs = []
+        for tr_idx, val_idx in cv.split(X, y):
+            clf = xgb.XGBClassifier(**params)
+            clf.fit(X[tr_idx], y[tr_idx])
+            prob = clf.predict_proba(X[val_idx])[:, 1]
+            aucs.append(roc_auc_score(y[val_idx], prob))
+        return float(np.mean(aucs))
+
+    def _search_hyperparameters(self, X, y, n_trials: int = 30) -> dict:
+        """
+        Run Bayesian hyperparameter search with Optuna.
+
+        Args:
+            X: Training feature matrix.
+            y: Training labels.
+            n_trials (int): Number of Optuna trials. Default 30.
+
+        Returns:
+            dict: Best hyperparameters found.
+        """
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=42),
+            pruner=optuna.pruners.MedianPruner(n_warmup_steps=5),
         )
-        if self.model_type == "xgboost":
-            self.model = xgb.XGBClassifier(
-                n_estimators=300,
-                max_depth=4,
-                learning_rate=0.01,
-                subsample=0.7,
-                colsample_bytree=0.7,
-                min_child_weight=5,
-                scale_pos_weight=scale_pos,
-                reg_alpha=1.0,
-                reg_lambda=2.0,
-                random_state=42,
-                eval_metric="aucpr",
-                early_stopping_rounds=30,
-            )
-        elif self.model_type == "lightgbm":
-            self.model = lgb.LGBMClassifier(
-                n_estimators=500,
-                max_depth=6,
-                learning_rate=0.05,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                min_child_samples=20,
-                scale_pos_weight=scale_pos,
-                reg_alpha=0.1,
-                reg_lambda=1.0,
-                random_state=42,
-                verbose=-1,
-            )
+        study.optimize(
+            lambda trial: self._optuna_objective(trial, X, y),
+            n_trials=n_trials,
+            show_progress_bar=True,
+        )
+        logger.info(f"Best CV ROC-AUC: {study.best_value:.4f}")
+        logger.info(f"Best params: {study.best_params}")
+        return study.best_params
+
+    # ──────────────────────────────────────────────────────────
+    #  Threshold calibration
+    # ──────────────────────────────────────────────────────────
+
+    def _find_optimal_threshold(self, X_val, y_val, recall_target=0.90):
+        """
+        Find the highest threshold that guarantees recall >= recall_target.
+
+        Calibration is performed on the training set to avoid leakage.
+        In oncological screening a false negative implies a potentially
+        serious diagnostic delay, hence the priority on recall.
+
+        Args:
+            X: Training feature matrix.
+            y: Training labels.
+            recall_target (float): Minimum recall required. Default 0.90.
+
+        Returns:
+            float: Optimal decision threshold rounded to two decimals.
+        """
+        probs = self.model.predict_proba(X_val)[:, 1]
+
+        best_threshold = 0.50
+        best_f1 = 0.0
+
+        for t in np.arange(0.05, 0.95, 0.01):
+            preds = (probs >= t).astype(int)
+            rec = recall_score(y_val, preds, zero_division=0)
+            f1 = f1_score(y_val, preds, zero_division=0)
+
+            if rec >= recall_target and f1 > best_f1:
+                best_f1 = f1
+                best_threshold = round(float(t), 2)
+
+        return best_threshold
+
+    # ──────────────────────────────────────────────────────────
+    #  Public API
+    # ──────────────────────────────────────────────────────────
 
     def train(
         self,
@@ -106,144 +162,101 @@ class TabularCancerModel:
         y_val=None,
         feature_names=None,
         class_weights=None,
+        n_trials: int = 30,
+        recall_target: float = 0.90,
     ):
-        """
-        Train the tabular model on the provided data.
-
-        If a validation set is supplied the model uses early stopping
-        (XGBoost) or early-stopping callbacks (LightGBM) to prevent
-        overfitting. After fitting, the decision threshold is optimised
-        on the validation set via ``_optimize_threshold``.
-
-        Args:
-            X_train (array-like of shape (n_samples, n_features)):
-                Training feature matrix.
-            y_train (array-like of shape (n_samples,)): Training labels.
-            X_val (array-like of shape (n_val, n_features) | None):
-                Validation feature matrix used for early stopping and
-                threshold optimisation. Pass ``None`` to skip both.
-            y_val (array-like of shape (n_val,) | None): Validation labels
-                aligned with ``X_val``.
-            feature_names (list[str] | None): Human-readable names for
-                each column of ``X_train``. Stored and serialised with the
-                model. Default is ``None``.
-            class_weights (dict | None): Class weight mapping forwarded to
-                ``_create_model`` for ``scale_pos_weight`` computation.
-                Default is ``None``.
-        """
         self.feature_names = feature_names
-        self._create_model(class_weights)
-        logger.info(f"Training {self.model_type} with {X_train.shape[0]} samples...")
+        logger.info(f"Training {self.model_type} — {len(X_train)} samples")
 
-        if self.model_type == "xgboost" and X_val is not None:
-            self.model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=50)
-        elif self.model_type == "lightgbm" and X_val is not None:
-            self.model.fit(
-                X_train,
-                y_train,
-                eval_set=[(X_val, y_val)],
-                callbacks=[lgb.early_stopping(30), lgb.log_evaluation(50)],
-            )
+        logger.info("Running Optuna hyperparameter search...")
+        best_params = self._search_hyperparameters(X_train, y_train, n_trials)
+
+        scale_pos = float((y_train == 0).sum()) / max(float((y_train == 1).sum()), 1.0)
+        final_params = {
+            **best_params,
+            "scale_pos_weight": scale_pos,
+            "eval_metric": "auc",
+            "random_state": 42,
+            "n_jobs": -1,
+        }
+
+        # 1. Entrenar modelo base
+        base_model = xgb.XGBClassifier(**final_params)
+        base_model.fit(X_train, y_train)
+        logger.info("Final model fitted.")
+
+        # Obtener probabilidades raw del modelo base sobre val set
+        if X_val is not None and y_val is not None:
+            cal_X = X_val
+            cal_y = y_val
         else:
-            self.model.fit(X_train, y_train)
+            cal_X = X_train
+            cal_y = y_train
 
-        if X_val is not None:
-            self._optimize_threshold(X_val, y_val)
+        raw_probs = base_model.predict_proba(cal_X)[:, 1]
+
+        # Ajustar isotonic regression: mapea raw_probs → calibrated_probs
+        self._calibrator = IsotonicRegression(out_of_bounds="clip")
+        self._calibrator.fit(raw_probs, cal_y)
+        self._base_model = base_model
+
+        # Wrapper para mantener la API predict_proba
+        self.model = base_model  # guardamos base para compatibilidad
+
+        logger.info("Probability calibration fitted (isotonic).")
+
+        # 3. Calibrar threshold sobre val set
+        self.best_threshold = self._find_optimal_threshold(cal_X, cal_y, recall_target)
+        logger.info(f"Best threshold: {self.best_threshold:.2f}")
         logger.info("✅ Tabular model trained")
 
-    def _optimize_threshold(self, X_val, y_val):
+    def predict_proba(self, X) -> np.ndarray:
         """
-        Find the decision threshold that maximises Youden's J statistic.
-
-        Computes the ROC curve on the validation set and selects the
-        threshold that maximises ``1.3 * TPR - FPR`` (a recall-weighted
-        variant of Youden's J). The result is clipped to [0.20, 0.60] to
-        avoid degenerate thresholds. The chosen threshold is stored in
-        ``self.best_threshold`` and logged alongside recall, precision,
-        and F1.
+        Return calibrated probability of the positive class.
 
         Args:
-            X_val (array-like of shape (n_val, n_features)): Validation
-                feature matrix.
-            y_val (array-like of shape (n_val,)): Validation labels.
-        """
-        probs = self.model.predict_proba(X_val)[:, 1]
-        fpr, tpr, thresholds = roc_curve(y_val, probs)
-        j_scores = tpr * 1.3 - fpr
-        best_idx = np.argmax(j_scores)
-        self.best_threshold = float(np.clip(thresholds[best_idx], 0.20, 0.60))
-
-        preds = (probs >= self.best_threshold).astype(int)
-        rec = recall_score(y_val, preds, zero_division=0)
-        prec = precision_score(y_val, preds, zero_division=0)
-        f1 = f1_score(y_val, preds, zero_division=0)
-        logger.info(
-            f"Threshold (Youden's J): {self.best_threshold:.3f} | "
-            f"Recall={rec:.3f} | Precision={prec:.3f} | F1={f1:.3f}"
-        )
-
-    def predict_proba(self, X):
-        """
-        Return the predicted probability of the positive class.
-
-        Args:
-            X (array-like of shape (n_samples, n_features)): Input feature
-                matrix.
+            X: Feature matrix of shape (n_samples, n_features).
 
         Returns:
-            np.ndarray of shape (n_samples,): Predicted probability of
-                class 1 for each sample.
+            np.ndarray of shape (n_samples,): P(cancer) calibrada.
         """
-        return self.model.predict_proba(X)[:, 1]
+        raw = self._base_model.predict_proba(X)[:, 1]
+        if hasattr(self, "_calibrator") and self._calibrator is not None:
+            return self._calibrator.predict(raw)
+        return raw
 
-    def predict(self, X):
+    def predict(self, X) -> np.ndarray:
         """
-        Return binary class predictions using the optimised threshold.
-
-        Probabilities from ``predict_proba`` are thresholded at
-        ``self.best_threshold`` to produce integer class labels.
+        Return binary predictions using the calibrated threshold.
 
         Args:
-            X (array-like of shape (n_samples, n_features)): Input feature
-                matrix.
+            X: Feature matrix of shape (n_samples, n_features).
 
         Returns:
-            np.ndarray of shape (n_samples,): Predicted class labels
-                (0 or 1).
+            np.ndarray of shape (n_samples,): Predicted labels (0 or 1).
         """
-        probs = self.predict_proba(X)
-        return (probs >= self.best_threshold).astype(int)
+        return (self.predict_proba(X) >= self.best_threshold).astype(int)
 
     def evaluate(self, X_test, y_test) -> dict:
         """
         Compute and log classification metrics on the test set.
 
         Args:
-            X_test (array-like of shape (n_samples, n_features)): Test
-                feature matrix.
-            y_test (array-like of shape (n_samples,)): Ground-truth test
-                labels.
+            X_test: Test feature matrix.
+            y_test: Ground-truth test labels.
 
         Returns:
-            dict: Evaluation results containing the following keys:
-                - ``"auc_roc"`` (float): ROC AUC score.
-                - ``"recall"`` (float): Recall for the positive class.
-                - ``"precision"`` (float): Precision for the positive class.
-                - ``"f1"`` (float): F1 score for the positive class.
-                - ``"confusion_matrix"`` (list[list[int]]): Confusion matrix
-                  as a nested list.
-                - ``"classification_report"`` (str): Full scikit-learn
-                  classification report string.
-                - ``"threshold"`` (float): Decision threshold used to
-                  produce predictions.
+            dict: Keys ``auc_roc``, ``recall``, ``precision``, ``f1``,
+                ``confusion_matrix``, ``classification_report``,
+                ``threshold``.
         """
         probs = self.predict_proba(X_test)
         preds = self.predict(X_test)
         results = {
             "auc_roc": roc_auc_score(y_test, probs),
-            "recall": recall_score(y_test, preds),
-            "precision": precision_score(y_test, preds),
-            "f1": f1_score(y_test, preds),
+            "recall": recall_score(y_test, preds, zero_division=0),
+            "precision": precision_score(y_test, preds, zero_division=0),
+            "f1": f1_score(y_test, preds, zero_division=0),
             "confusion_matrix": confusion_matrix(y_test, preds).tolist(),
             "classification_report": classification_report(y_test, preds),
             "threshold": self.best_threshold,
@@ -252,68 +265,47 @@ class TabularCancerModel:
         logger.info(f"AUC-ROC: {results['auc_roc']:.4f}")
         return results
 
-    def cross_validate(self, X, y, cv=5) -> dict:
+    def cross_validate(self, X, y, cv: int = 5) -> dict:
         """
-        Evaluate generalisation performance via stratified k-fold
-        cross-validation.
+        Stratified k-fold cross-validation on ROC-AUC.
 
-        Early stopping is temporarily disabled during cross-validation
-        because no separate validation set is available inside each fold.
-        The original ``early_stopping_rounds`` setting is restored
-        afterwards.
+        Usa el modelo base (XGBoost) directamente para CV,
+        ya que el calibrador manual no implementa la API de sklearn estimator.
 
         Args:
-            X (array-like of shape (n_samples, n_features)): Full feature
-                matrix (train + val + test combined is acceptable here as
-                the CV loop handles splitting internally).
-            y (array-like of shape (n_samples,)): Target labels aligned
-                with ``X``.
-            cv (int): Number of stratified folds. Default is 5.
+            X: Full feature matrix.
+            y: Target labels.
+            cv (int): Number of folds. Default 5.
 
         Returns:
-            dict: Cross-validation results containing:
-                - ``"mean_recall"`` (float): Mean recall across all folds.
-                - ``"std_recall"`` (float): Standard deviation of recall
-                  across all folds.
-                - ``"scores"`` (list[float]): Per-fold recall scores.
+            dict: Keys mean_auc, std_auc, scores.
         """
-        original = None
-        if hasattr(self.model, "early_stopping_rounds"):
-            original = self.model.early_stopping_rounds
-            self.model.set_params(early_stopping_rounds=None)
-
-        cv_scores = cross_val_score(
-            self.model,
+        scores = cross_val_score(
+            self._base_model,  # ← modelo base, no el wrapper
             X,
             y,
             cv=StratifiedKFold(cv, shuffle=True, random_state=42),
-            scoring="recall",
+            scoring="roc_auc",
         )
-
-        if original is not None:
-            self.model.set_params(early_stopping_rounds=original)
-
-        logger.info(f"CV Recall: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
+        logger.info(f"CV ROC-AUC: {scores.mean():.4f} ± {scores.std():.4f}")
         return {
-            "mean_recall": cv_scores.mean(),
-            "std_recall": cv_scores.std(),
-            "scores": cv_scores.tolist(),
+            "mean_auc": float(scores.mean()),
+            "std_auc": float(scores.std()),
+            "scores": scores.tolist(),
         }
 
-    def save(self, path: Path):
+    def save(self, path: Path) -> None:
         """
         Serialise the trained model and metadata to disk using joblib.
 
-        The saved file contains the model object, model type string,
-        feature names, and the optimised decision threshold so that the
-        model can be fully restored via ``load``.
-
         Args:
-            path (Path): Destination file path for the serialised model.
+            path (Path): Destination file path.
         """
         joblib.dump(
             {
                 "model": self.model,
+                "base_model": self._base_model,
+                "calibrator": self._calibrator,
                 "model_type": self.model_type,
                 "feature_names": self.feature_names,
                 "best_threshold": self.best_threshold,
@@ -325,19 +317,19 @@ class TabularCancerModel:
     @classmethod
     def load(cls, path: Path) -> "TabularCancerModel":
         """
-        Deserialise and restore a previously saved ``TabularCancerModel``.
+        Deserialise a previously saved TabularCancerModel.
 
         Args:
-            path (Path): Path to the joblib file produced by ``save``.
+            path (Path): Path to the joblib file produced by save.
 
         Returns:
-            TabularCancerModel: Fully restored model instance with the
-                original model object, model type, feature names, and
-                decision threshold.
+            TabularCancerModel: Fully restored model instance.
         """
         state = joblib.load(path)
         instance = cls(model_type=state["model_type"])
         instance.model = state["model"]
+        instance._base_model = state.get("base_model", state["model"])
+        instance._calibrator = state.get("calibrator", None)
         instance.feature_names = state["feature_names"]
         instance.best_threshold = state["best_threshold"]
         return instance

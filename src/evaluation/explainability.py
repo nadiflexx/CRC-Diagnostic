@@ -408,10 +408,15 @@ class TabularExplainer:
     """
     SHAP-based explainability helper for the tabular cancer risk model.
 
-    Attempts to use ``shap.TreeExplainer`` for gradient-boosted models
-    (XGBoost / LightGBM) and falls back to ``shap.KernelExplainer`` for
-    any other model type. If SHAP is not installed, feature importances
-    from the underlying model are used instead.
+    Attempts to use ``shap.TreeExplainer`` for XGBoost models and falls
+    back to ``shap.KernelExplainer`` for any other model type. If SHAP
+    is not installed, feature importances from the underlying model are
+    used instead.
+
+    Provides both single-sample explanation (``explain``) and global
+    visualisation plots (``plot_explanation``) including beeswarm and
+    bar charts consistent with the clinical reporting style of the
+    training pipeline.
     """
 
     def __init__(self, model, feature_names: list[str]):
@@ -419,9 +424,9 @@ class TabularExplainer:
         Initialise the tabular explainer.
 
         Args:
-            model: Trained model instance with a ``predict_proba``
-                method and optionally a ``model`` attribute exposing
-                ``feature_importances_``.
+            model: Trained ``TabularCancerModel`` instance with a
+                ``predict_proba`` method and a ``model`` attribute
+                exposing the underlying XGBoost classifier.
             feature_names (list[str]): Ordered list of feature names
                 corresponding to the columns of the input matrix.
         """
@@ -436,18 +441,16 @@ class TabularExplainer:
 
     def fit(self, X_background) -> None:
         """
-        Initialise the SHAP explainer using background data.
+        Initialise the SHAP TreeExplainer using the fitted XGBoost model.
 
-        Tries ``shap.TreeExplainer`` first (fast, exact for tree
-        models). Falls back to ``shap.KernelExplainer`` with a random
-        subsample of up to 100 background points if the tree explainer
-        fails. If SHAP is not installed the method logs a warning and
-        returns without raising.
+        Falls back to ``KernelExplainer`` with a random subsample of up
+        to 100 background points if ``TreeExplainer`` fails. If SHAP is
+        not installed the method logs a warning and returns without
+        raising.
 
         Args:
             X_background (array-like of shape (n_samples, n_features)):
-                Background dataset used to marginalise features in
-                ``KernelExplainer``.
+                Background dataset (training set recommended).
         """
         try:
             import shap
@@ -468,35 +471,53 @@ class TabularExplainer:
         """
         Generate a feature-level explanation for the given input.
 
-        Delegates to ``_explain_shap`` if the SHAP explainer has been
-        fitted, otherwise falls back to ``_explain_feature_importance``.
-
         Args:
-            X (array-like of shape (1, n_features)): Single-sample
-                input to explain.
+            X (array-like of shape (1, n_features)): Single-sample input.
 
         Returns:
-            dict: Explanation dictionary.
+            dict: Explanation dictionary with keys ``shap_values``,
+                ``feature_names``, ``top_risk_factors``,
+                ``protective_factors``, ``base_value``.
         """
         if self._explainer is not None and self._fitted:
             return self._explain_shap(X)
         return self._explain_feature_importance(X)
 
-    def plot_explanation(self, X, save_path: str | None = None):
+    def plot_explanation(
+        self,
+        X,
+        save_path: str | None = None,
+        plot_type: str = "bar",
+    ) -> "plt.Figure":
         """
-        Render a horizontal bar chart of the top-15 SHAP contributions.
+        Render SHAP visualisations for the given input.
 
-        Positive SHAP values are drawn in red (``#D32F2F``); negative
-        values in green (``#388E3C``).
+        When ``plot_type`` is ``"bar"`` a horizontal bar chart of the
+        top-15 SHAP contributions is produced (positive = risk-increasing
+        in red, negative = protective in green).
+
+        When ``plot_type`` is ``"beeswarm"`` a global beeswarm summary
+        plot is produced using the provided ``X`` as the evaluation set
+        (recommended: pass ``X_test`` with multiple rows).
 
         Args:
-            X (array-like of shape (1, n_features)): Input to explain.
+            X (array-like): Input to explain. For ``"bar"`` pass a
+                single row (1, n_features). For ``"beeswarm"`` pass the
+                full test set.
             save_path (str | None): Optional file path where the PNG
                 will be saved at 150 DPI. Default is ``None``.
+            plot_type (str): One of ``"bar"`` or ``"beeswarm"``.
+                Default is ``"bar"``.
 
         Returns:
             matplotlib.figure.Figure: The closed figure object.
         """
+        import matplotlib.pyplot as plt
+
+        if plot_type == "beeswarm":
+            return self._plot_beeswarm(X, save_path)
+
+        # Default: single-sample bar chart
         explanation = self.explain(X)
         sv = explanation["shap_values"]
 
@@ -508,8 +529,8 @@ class TabularExplainer:
         ax.barh(range(len(sorted_idx)), sv[sorted_idx], color=colors)
         ax.set_yticks(range(len(sorted_idx)))
         ax.set_yticklabels(names)
-        ax.set_xlabel("Risk contribution")
-        ax.set_title("Patient Risk Factors")
+        ax.set_xlabel("Risk contribution (SHAP value)")
+        ax.set_title("Patient Risk Factors — SHAP")
         ax.axvline(x=0, color="black", linewidth=0.5)
         plt.tight_layout()
 
@@ -522,20 +543,92 @@ class TabularExplainer:
     #  Private helpers
     # ─────────────────────────────────────────────
 
+    def _plot_beeswarm(self, X, save_path: str | None) -> "plt.Figure":
+        """
+        Produce a SHAP beeswarm summary plot over multiple samples.
+
+        Uses up to 2 000 samples for performance. Saves two files when
+        ``save_path`` is provided: the beeswarm PNG and a bar-importance
+        PNG with ``_bar`` appended before the extension.
+
+        Args:
+            X (array-like of shape (n_samples, n_features)): Evaluation
+                set, typically the test split.
+            save_path (str | None): Base file path for PNG output.
+
+        Returns:
+            matplotlib.figure.Figure: Beeswarm figure (closed).
+        """
+        import matplotlib.pyplot as plt
+
+        if self._explainer is None or not self._fitted:
+            logger.warning("SHAP explainer not fitted — skipping beeswarm plot")
+            return plt.figure()
+
+        try:
+            import pandas as pd
+            import shap
+
+            n = min(2000, len(X))
+            rng = np.random.default_rng(42)
+            idx = rng.choice(len(X), size=n, replace=False)
+            X_sub = pd.DataFrame(X[idx], columns=self.feature_names)
+
+            shap_values = self._explainer.shap_values(X_sub)
+            sv = shap_values if not isinstance(shap_values, list) else shap_values[1]
+
+            # Beeswarm
+            fig_bee = plt.figure(figsize=(10, 7))
+            shap.summary_plot(
+                sv,
+                X_sub,
+                feature_names=self.feature_names,
+                show=False,
+            )
+            plt.title("SHAP — Feature impact (beeswarm)")
+            plt.tight_layout()
+            if save_path:
+                plt.savefig(save_path, dpi=150, bbox_inches="tight")
+            plt.close(fig_bee)
+
+            # Bar importance
+            fig_bar = plt.figure(figsize=(8, 6))
+            shap.summary_plot(
+                sv,
+                X_sub,
+                feature_names=self.feature_names,
+                plot_type="bar",
+                show=False,
+            )
+            plt.title("SHAP — Mean |SHAP| importance")
+            plt.tight_layout()
+            if save_path:
+                from pathlib import Path as _Path
+
+                p = _Path(save_path)
+                bpath = p.parent / (p.stem + "_bar" + p.suffix)
+                plt.savefig(str(bpath), dpi=150, bbox_inches="tight")
+            plt.close(fig_bar)
+
+            return fig_bee
+
+        except Exception as exc:
+            logger.warning(f"Beeswarm plot failed: {exc}")
+            return plt.figure()
+
     def _explain_shap(self, X) -> dict:
         """
-        Compute a SHAP-based explanation.
+        Compute a SHAP-based explanation for a single sample.
 
         Args:
             X (array-like of shape (1, n_features)): Input to explain.
 
         Returns:
-            dict: Keys ``"shap_values"``, ``"feature_names"``,
-                ``"top_risk_factors"``, ``"protective_factors"``,
-                ``"base_value"``.
+            dict: Keys ``shap_values``, ``feature_names``,
+                ``top_risk_factors``, ``protective_factors``,
+                ``base_value``.
         """
         shap_values = self._explainer.shap_values(X)
-
         if isinstance(shap_values, list):
             sv = shap_values[1] if len(shap_values) > 1 else shap_values[0]
         else:
@@ -548,12 +641,10 @@ class TabularExplainer:
             key=lambda p: abs(p[1]),
             reverse=True,
         )
-
         expected = self._explainer.expected_value
         base_value = float(
             expected[1] if isinstance(expected, (list, np.ndarray)) else expected
         )
-
         return {
             "shap_values": np.array(sv),
             "feature_names": self.feature_names,
@@ -564,15 +655,13 @@ class TabularExplainer:
 
     def _explain_feature_importance(self, X) -> dict:
         """
-        Fallback explanation using built-in feature importances.
+        Fallback explanation using built-in XGBoost feature importances.
 
         Args:
-            X (array-like): Not used; kept for API consistency.
+            X: Not used; kept for API consistency.
 
         Returns:
-            dict: Keys ``"shap_values"``, ``"feature_names"``,
-                ``"top_risk_factors"``, ``"protective_factors"``,
-                ``"base_value"``.
+            dict: Same keys as ``_explain_shap`` with ``base_value=0.0``.
         """
         try:
             importances = self.model.model.feature_importances_
@@ -584,7 +673,6 @@ class TabularExplainer:
             key=lambda p: abs(p[1]),
             reverse=True,
         )
-
         return {
             "shap_values": importances,
             "feature_names": self.feature_names,

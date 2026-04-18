@@ -69,13 +69,18 @@ def main() -> None:
     with c2:
         st.markdown(
             module_card(
-                "🧪",
-                "Clinical Screening",
-                "Predictive tabular analysis using tumor markers and blood counts.",
+                "🧬",
+                "Diagnóstico Tumoral",
+                "Análisis predictivo CRC: biomarcadores hematológicos + "
+                "features radiómicas (XGBoost · SHAP · NCCN 2023).",
             ),
             unsafe_allow_html=True,
         )
-        st.page_link("pages/02_cribado.py", label="Run Screening", icon="🔍")
+        st.page_link(
+            "pages/02_tumor_diagnostico.py",
+            label="Ejecutar Diagnóstico Tumoral",
+            icon="🧬",
+        )
 
     with c3:
         st.markdown(

@@ -50,6 +50,14 @@ class PathSettings(BaseSettings):
         return self.DATA / "colon_processed"
 
     @property
+    def TABULAR_PROCESSED(self) -> Path:
+        return self.DATA / "tabular_processed"
+
+    @property
+    def TABULAR_CLEAN(self) -> Path:
+        return self.DATA / "tabular_clean"
+
+    @property
     def COLON_TISSUE_ONLY(self) -> Path:
         return self.DATA / "colon_processed_tissue_only"
 

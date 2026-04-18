@@ -42,9 +42,29 @@ def get_patient_history(patient_id: int) -> list[dict]:
 
 
 def upload_colonoscopy_image(patient_id: int, file) -> dict | None:
-    """Uploads an endoscopy image for a patient."""
+    """
+    Uploads an endoscopy image (or extracted video frame) for a patient.
+
+    Compatible with:
+        - Streamlit UploadedFile (has .getvalue() and .name)
+        - _FrameFile wrapper (has .getvalue() and .name)
+    """
     try:
-        files = {"file": (file.name, file.getvalue(), file.type)}
+        # ── Obtener bytes ──────────────────────────────────────────────
+        if hasattr(file, "getvalue"):
+            file_bytes = file.getvalue()
+        elif hasattr(file, "read"):
+            file_bytes = file.read()
+            if hasattr(file, "seek"):
+                file.seek(0)
+        else:
+            return None
+
+        filename = getattr(file, "name", "frame.jpg")
+        mime = getattr(file, "type", "image/jpeg")
+
+        files = {"file": (filename, file_bytes, mime)}
+
         resp = requests.post(
             f"{API_BASE_URL}/uploads/colonoscopy/{patient_id}",
             files=files,
