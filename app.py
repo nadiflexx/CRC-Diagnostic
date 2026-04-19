@@ -35,7 +35,7 @@ st.set_page_config(
 
 # Rutas absolutas
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-PKL_PATH    = os.path.join(BASE_DIR, "model", "artifacts", "xgb_inference_package.pkl")
+PKL_PATH    = os.path.join(BASE_DIR, "model", "artifacts", "xgb_tumoral_model_package.pkl")
 METRICS_PATH = os.path.join(BASE_DIR, "model", "artifacts", "inspection_plots", "inspection_metrics.json")
 PLOTS_DIR   = os.path.join(BASE_DIR, "model", "artifacts", "inspection_plots")
 

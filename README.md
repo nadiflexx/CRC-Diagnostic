@@ -52,7 +52,7 @@ CRC-Diagnostic/
     ├── xgb_clinical_model.py                # Pipeline completo: Optuna → XGBoost → calibración → PKL
     └── artifacts/                           # Generados en runtime [gitignored]
         ├── xgb_clinical_model.json          # Pesos XGBoost exportados
-        ├── xgb_inference_package.pkl        # Paquete de inferencia: model + model_raw + threshold + feature_names
+        ├── xgb_tumoral_model_package.pkl     # Paquete de inferencia: model + model_raw + threshold + feature_names
         └── inspection_plots/                # Gráficos de evaluación + inspection_metrics.json
 ```
 
@@ -103,7 +103,7 @@ Ejecuta el pipeline completo en un solo comando:
 python model/xgb_clinical_model.py
 ```
 
-> Salida: `model/artifacts/xgb_inference_package.pkl` con claves `model` (calibrado), `model_raw` (para SHAP), `threshold` y `feature_names`.
+> Salida: `model/artifacts/xgb_tumoral_model_package.pkl` con claves `model` (calibrado), `model_raw` (para SHAP), `threshold` y `feature_names`.
 
 ---
 

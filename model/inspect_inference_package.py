@@ -1,7 +1,7 @@
 """inspect_inference_package.py
 
 Verifica la integridad y el rendimiento del paquete de inferencia exportado
-(``xgb_inference_package.pkl``) antes de desplegarlo en producción.
+(``xgb_tumoral_model_package.pkl``) antes de desplegarlo en producción.
 
 Flujo:
     1. Carga el paquete PKL y extrae modelo, umbral y nombres de features.
@@ -45,7 +45,7 @@ else:
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PKL_PATH = os.path.join(BASE_DIR, "artifacts", "xgb_inference_package.pkl")
+PKL_PATH = os.path.join(BASE_DIR, "artifacts", "xgb_tumoral_model_package.pkl")
 CSV_PATH = os.path.join(BASE_DIR, "..", "Data", "processed", "dataset_clinico_tumoral.csv")
 OUT_DIR = os.path.join(BASE_DIR, "artifacts", "inspection_plots")
 
