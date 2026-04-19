@@ -5,7 +5,7 @@ Dashboard Streamlit para el modelo XGBoost de diagnóstico de Cáncer Colorrecta
 Estructura:
   Tab 1 — Diagnóstico en Vivo   : formulario clínico + indicador de riesgo + SHAP local
   Tab 2 — Análisis y Rendimiento : galería de plots + tabla de métricas
-  Tab 3 — Documentación Técnica  : techo biológico + Optuna + SHAP
+  Tab 3 — Documentación Técnica  : estadificación T1-T4 + Temperature Scaling + Optuna + SHAP
 
 Uso:
     streamlit run app.py
@@ -38,6 +38,13 @@ BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 PKL_PATH    = os.path.join(BASE_DIR, "model", "artifacts", "xgb_inference_package.pkl")
 METRICS_PATH = os.path.join(BASE_DIR, "model", "artifacts", "inspection_plots", "inspection_metrics.json")
 PLOTS_DIR   = os.path.join(BASE_DIR, "model", "artifacts", "inspection_plots")
+
+# Importar ModeloCalibraado ANTES de joblib.load para que pueda deserializar el PKL
+_model_dir = os.path.join(BASE_DIR, "model")
+if _model_dir not in sys.path:
+    sys.path.insert(0, _model_dir)
+_calibration_mod = importlib.import_module("calibration")
+ModeloCalibraado = _calibration_mod.ModeloCalibraado  # necesario para unpickling del PKL
 
 
 # Genera los plots y métricas de inspección si alguno falta
@@ -88,7 +95,8 @@ def load_metrics() -> dict:
 
 
 pkg           = load_package()
-model         = pkg["model"]
+model         = pkg["model"]          # CalibratedClassifierCV — probabilidades fiables
+model_raw     = pkg.get("model_raw", model)  # XGBoost puro — solo para TreeExplainer SHAP
 threshold     = float(pkg.get("threshold", 0.2))
 feature_names: list = pkg["feature_names"]
 
@@ -433,7 +441,7 @@ with tab1:
                         unsafe_allow_html=True)
 
             with st.spinner("Calculando impacto SHAP..."):
-                explainer = shap.TreeExplainer(model)
+                explainer = shap.TreeExplainer(model_raw)
                 shap_raw  = explainer.shap_values(X_input)
 
                 if isinstance(shap_raw, list):
@@ -601,27 +609,28 @@ with tab3:
     col_doc1, col_doc2 = st.columns(2, gap="large")
 
     with col_doc1:
-        st.markdown("### 🧱 El Techo Biológico del 88%")
+        st.markdown("### 🧱 Estadificación T1–T4: solapamiento clínico real")
         st.markdown("""
 <div class="info-card">
-El modelo <b>no puede superar un ROC-AUC de ≈ 0.88</b> por diseño deliberado.
-Este límite matemático se introduce durante la generación de datos sintéticos
-para replicar la ambigüedad clínica real:
+El dataset sintético modela la <b>heterogeneidad biológica real del CRC</b> mediante
+estadificación T1–T4 calibrada con NCCN 2023, ESGAR 2022 y Gollub 2018:
 
 <ul>
-  <li><b>12% de ruido biológico</b>: se inyectan falsos negativos clínicos —cánceres en
-      estadio temprano con CEA &lt; 3 ng/mL y hemoglobina preservada— y falsos positivos
-      —pacientes sanos con biomarcadores elevados por tabaquismo o enfermedad inflamatoria
-      intestinal (EII)—.</li>
-  <li><b>Distribuciones solapadas</b>: las matrices de covarianza multivariante de los grupos
-      <i>cáncer</i> y <i>sano</i> se calibran para generar zonas de ambigüedad irreducible,
-      replicando la variabilidad real descrita en NCCN 2023 y Duffy et al. 2021.</li>
-  <li><b>Verificación anti-data leakage</b>: <code>check_features.py</code> confirma que
-      ninguna variable separa perfectamente a los enfermos de los sanos por sí sola.</li>
+  <li><b>T1 (18 %)</b>: tumor confinado a mucosa/submucosa. CEA ≈ 1.9 ng/mL, ADC levemente
+      restringido — clínicamente casi indistinguible de tejido benigno. El modelo asigna
+      ~55–65 % en estos casos: correcto, necesitan biopsia confirmatoria.</li>
+  <li><b>T2 (27 %)</b>: invade muscular propia. CEA ≈ 5 ng/mL, zona gris. Considerable
+      solapamiento con sanos inflamados (EII, diverticulitis).</li>
+  <li><b>T3 (30 %)</b>: penetra subserosa. CEA ≈ 18 ng/mL, ADC claramente restringido,
+      anemia establecida. Señal inequívoca.</li>
+  <li><b>T4/M1 (25 %)</b>: perforación o metástasis. CEA &gt; 90 ng/mL, ADC muy bajo.
+      El modelo asigna probabilidades cercanas al 95 %.</li>
 </ul>
 
-Este techo del 88% <b>certifica que el dataset es un reto real</b> y que el modelo
-no memoriza patrones triviales.
+El 14 % de los controles sanos recibe perturbaciones <b>multi-feature simultáneas</b>
+(CEA + Hgb + ADC + Entropía) que simulan EII activa o diverticulitis —exactamente
+el perfil de un T2 temprano—. Esto preserva la zona gris clínica genuina y produce
+un modelo con <b>AUC = 0.974</b> y probabilidades interpretables en el rango 5–95 %.
 </div>
 """, unsafe_allow_html=True)
 
@@ -678,6 +687,37 @@ sobre el conjunto de entrenamiento. El resultado es **threshold = 0.20**,
 priorizando la sensibilidad clínica (minimizar falsos negativos en oncología).
         """)
 
+        st.markdown("### 🌡️ Temperature Scaling — Calibración de Probabilidades")
+        st.markdown("""
+<div class="info-card">
+XGBoost tiende a la <b>sobreconfianza</b>: los logits se acumulan en cada árbol y
+saturan la función sigmoid, produciendo probabilidades pegadas a 0 o 1.
+<b>Temperature Scaling</b> (Guo et al., ICML 2017) corrige esto con un único
+parámetro escalar <i>T</i>:
+
+<p style="text-align:center;font-style:italic;margin:.6rem 0">
+  p<sub>cal</sub> = σ( logit(p<sub>raw</sub>) / T )
+</p>
+
+<ul>
+  <li><b>T = 1</b>: sin cambio. <b>T &gt; 1</b>: comprime los extremos hacia el centro
+      (reduce sobreconfianza). El punto 50 % es siempre invariante.</li>
+  <li><b>AUC intacto</b>: dividir los logits por T es una transformación estrictamente
+      monotónica — el ranking de pacientes no cambia, solo los valores absolutos.</li>
+  <li><b>T óptimo</b>: encontrado minimizando la <i>Negative Log-Likelihood</i> sobre
+      40 200 pacientes de calibración (12 % del dataset, separado de train y test)
+      mediante <code>scipy.minimize_scalar</code>.</li>
+  <li><b>Floor clínico T ≥ 1.5</b>: ningún sistema de apoyo diagnóstico debe emitir
+      certeza absoluta. Un T1 con señal débil debe recibir ~55–65 %, no 98 %.</li>
+  <li><b>Clip final [5 %, 95 %]</b>: límite epistémico explícito — el modelo nunca
+      dice "imposible" ni "certeza absoluta".</li>
+</ul>
+
+<b>Resultado:</b> distribución post-calibración: 0 % &lt; 5 % · <b>72.6 % entre 5–95 %</b>
+· 27.4 % &gt; 95 % (frente al 41 %/18 %/41 % antes de calibrar).
+</div>
+""", unsafe_allow_html=True)
+
         st.markdown("### 🔎 SHAP — Explicabilidad Médica Certificable")
         st.markdown("""
 <div class="info-card">
@@ -703,9 +743,11 @@ cumpliendo con los principios de IA responsable en entornos médicos (EU AI Act,
     st.markdown("""
 | Referencia | Relevancia |
 |---|---|
-| NCCN Clinical Practice Guidelines — Colorectal Cancer, v2.2023 | Rangos clínicos CEA y criterios de derivación |
-| ESGAR Consensus Statement on Rectal MRI, 2022 | Parámetros ADC y criterios DWI |
+| NCCN Clinical Practice Guidelines — Colorectal Cancer, v2.2023 | Rangos clínicos CEA, estadificación T1–T4 y criterios de derivación |
+| ESGAR Consensus Statement on Rectal MRI, 2022 | Parámetros ADC y criterios DWI por estadio |
+| Gollub et al., *Rectal MRI staging*, Radiology 2018 | Parámetros radiológicos por estadio T1–T4 |
 | Duffy et al., *CEA as a marker for colorectal cancer*, EJCA 2021 | Efectos tabaquismo / EII sobre CEA basal |
+| Guo et al., *On Calibration of Modern Neural Networks*, ICML 2017 | Base teórica Temperature Scaling |
 | Lundberg & Lee, *A Unified Approach to Interpreting Model Predictions*, NeurIPS 2017 | Base teórica SHAP |
-| Akiba et al., *Optuna: A Next-generation Hyperparameter Optimization Framework*, KDD 2019 | Base teórica búsqueda bayesiana |
+| Akiba et al., *Optuna: A Next-generation Hyperparameter Optimization Framework*, KDD 2019 | Base teórica búsqueda bayesiana TPE |
     """)

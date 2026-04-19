@@ -24,7 +24,9 @@ RNG = np.random.default_rng(42)
 # Se usa log(CEA) porque la distribución real del CEA es log-normal.
 
 CANCER_MEANS = np.array([np.log(7.0), 11.40, 1240.0, 6.10, 33.0])
-CANCER_STDS  = np.array([1.10,         2.00,  270.0,  1.40, 13.0])
+# Stds amplios: el cáncer es biológicamente heterogéneo (distinto estadio, vascularización, necrosis).
+# Valores estrechos aquí producen separabilidad artificial y probabilidades extremas.
+CANCER_STDS  = np.array([1.55,         2.80,  360.0,  2.10, 20.0])
 
 # Correlaciones clínicas (cáncer): CEA↑ → Hgb↓ anemia; ADC↓ difusión restringida → CEA↑ y entropía↑.
 CANCER_CORR = np.array([
@@ -37,7 +39,8 @@ CANCER_CORR = np.array([
 
 # Correlaciones (sano): mucho más débiles al no existir sinergia fisiopatológica tumoral.
 HEALTHY_MEANS = np.array([np.log(2.10), 13.50, 1540.0, 4.80, 21.0])
-HEALTHY_STDS  = np.array([0.70,          1.80,  210.0,  1.10,  7.5])
+# Stds sanos también ampliados: variabilidad inter-individuo e inter-equipo real.
+HEALTHY_STDS  = np.array([0.85,          2.10,  260.0,  1.35,  9.5])
 
 HEALTHY_CORR = np.array([
     [ 1.00, -0.08, -0.06,  0.12,  0.09],   # log(CEA)
@@ -46,6 +49,26 @@ HEALTHY_CORR = np.array([
     [ 0.12, -0.07, -0.22,  1.00,  0.32],   # Entropia GLCM
     [ 0.09, -0.05, -0.16,  0.32,  1.00],   # Contraste GLCM
 ])
+
+# ── Parámetros por estadio tumoral (T1–T4/M1) ────────────────────────────────
+# Columnas: [log(CEA)_mu, Hgb_mu, ADC_mu, Entropía_mu, Contraste_mu]
+#           [log(CEA)_sg, Hgb_sg, ADC_sg, Entropía_sg, Contraste_sg]
+#            hom_base, sph_mu, skew_mu
+# Calibrado con: Gollub 2018, Lambregts 2013, Horvat 2019, NCCN 2023.
+STAGE_PARAMS = {
+    # T1 — confinado a mucosa/submucosa. En clínica real el T1 temprano es casi
+    # indistinguible de tejido benigno por biomarcadores séricos: CEA normal o
+    # marginalmente elevado, ADC levemente restringido solo en lesiones >1 cm.
+    # Solapamiento intencionado con sanos para forzar probabilidades 30-60%.
+    1: ([np.log(1.9),  13.4, 1430., 4.92, 22.], [0.72, 2.00, 280., 1.35, 10.0], 0.67, 0.72, 0.14),
+    # T2 — invade muscular propia: señal moderada; sigue habiendo solapamiento
+    # considerable con sanos inflamados y variabilidad individual alta.
+    2: ([np.log(5.0),  12.2, 1120., 5.70, 28.], [0.88, 2.00, 280., 1.45, 12.0], 0.50, 0.67, 0.48),
+    # T3 — penetra subserosa: CEA elevado, ADC claramente restringido, anemia.
+    3: ([np.log(18.0), 10.3,  840., 6.60, 41.], [1.00, 2.20, 280., 1.40, 14.0], 0.32, 0.56, 0.90),
+    # T4/M1 — perforación o metástasis: CEA muy alto, ADC muy bajo, tumor necrótico.
+    4: ([np.log(90.0),  8.0,  650., 7.60, 56.], [1.20, 1.80, 230., 1.45, 17.0], 0.18, 0.43, 1.35),
+}
 
 
 def corr_a_cov(corr: np.ndarray, stds: np.ndarray) -> np.ndarray:
@@ -101,26 +124,43 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
     entropy  = np.zeros(n)
     contrast = np.zeros(n)
 
-    # Grupo cáncer
+    # Grupo cáncer — estadificado T1→T4/M1
     cancer_idx = np.where(diag == 1)[0]
     n_c = len(cancer_idx)
+
+    # Arrays de radiomics derivadas stage-aware (sólo para cáncer)
+    hom_base_c = np.zeros(n_c)
+    sph_mu_c   = np.zeros(n_c)
+    skew_mu_c  = np.zeros(n_c)
+
     if n_c > 0:
-        samples_c = RNG.multivariate_normal(CANCER_MEANS, cov_cancer, size=n_c)
+        # Residuos correlacionados estándar: preservan estructura CANCER_CORR por estadio.
+        L_cancer   = np.linalg.cholesky(CANCER_CORR)
+        z_c        = RNG.standard_normal((n_c, 5))
+        corr_res_c = z_c @ L_cancer.T          # (n_c, 5), media≈0, std≈1 por columna
 
-        # Pacientes >70 años: CEA un poco más alto y Hgb algo más baja (NCCN 2023)
-        ages_c = ages[cancer_idx]
-        exceso = np.maximum(ages_c - 70, 0.0)
-        delta_cea_edad = np.where(ages_c > 70, np.minimum(0.30 + 0.012 * exceso, 0.70), 0.0)
-        delta_hgb_edad = np.where(ages_c > 70, np.maximum(-0.80 - 0.04 * exceso, -2.00), 0.0)
+        # Estadificación: 18% T1 · 27% T2 · 30% T3 · 25% T4/M1
+        stages = RNG.choice([1, 2, 3, 4], size=n_c, p=[0.18, 0.27, 0.30, 0.25])
 
-        # Las mujeres tienen de media 1.5 g/dL menos de hemoglobina (OMS 2011)
-        offset_genero = np.where(gender[cancer_idx] == 1, 0.0, -1.5)
+        for stage, (means_s, stds_s, hom_b, sph_m, skew_m) in STAGE_PARAMS.items():
+            mask = stages == stage
+            if not mask.any():
+                continue
+            r      = corr_res_c[mask]
+            ages_s = ages[cancer_idx[mask]]
+            exceso = np.maximum(ages_s - 70, 0.0)
+            d_cea  = np.where(ages_s > 70, np.minimum(0.30 + 0.012 * exceso, 0.70), 0.0)
+            d_hgb  = np.where(ages_s > 70, np.maximum(-0.80 - 0.04 * exceso, -2.00), 0.0)
+            g_off  = np.where(gender[cancer_idx[mask]] == 1, 0.0, -1.5)
 
-        cea[cancer_idx]      = np.exp(samples_c[:, 0] + delta_cea_edad)  # exp deshace el log → distribución log-normal
-        hgb[cancer_idx]      = samples_c[:, 1] + delta_hgb_edad + offset_genero
-        adc_mean[cancer_idx] = samples_c[:, 2]
-        entropy[cancer_idx]  = samples_c[:, 3]
-        contrast[cancer_idx] = samples_c[:, 4]
+            cea[cancer_idx[mask]]      = np.exp(means_s[0] + stds_s[0] * r[:, 0] + d_cea)
+            hgb[cancer_idx[mask]]      = means_s[1] + stds_s[1] * r[:, 1] + d_hgb + g_off
+            adc_mean[cancer_idx[mask]] = means_s[2] + stds_s[2] * r[:, 2]
+            entropy[cancer_idx[mask]]  = means_s[3] + stds_s[3] * r[:, 3]
+            contrast[cancer_idx[mask]] = means_s[4] + stds_s[4] * r[:, 4]
+            hom_base_c[mask] = hom_b
+            sph_mu_c[mask]   = sph_m
+            skew_mu_c[mask]  = skew_m
 
     # Grupo sano
     healthy_idx = np.where(diag == 0)[0]
@@ -146,31 +186,38 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
         contrast[healthy_idx] = samples_h[:, 4]
 
     # ── Features radiómicas derivadas ─────────────────────────────────────────
-    # ADC_Std: mayor heterogeneidad interna en tejido maligno (necrosis e hipoxia).
+    # ADC_Std: lognormal independiente del nivel ADC; cubre rangos reales inter-equipo.
+    # Tumor (mediana ~200 µm²/s, p5~68, p95~480→clip): necrosis e hipoxia intra-tumoral.
+    # Sano  (mediana ~82  µm²/s, p5~30, p95~195):      tejido uniforme, mínima dispersión.
     adc_std = np.where(
         diag == 1,
-        np.abs(adc_mean * 0.20) + RNG.normal(0, 38.0, n),
-        np.abs(adc_mean * 0.11) + RNG.normal(0, 24.0, n),
+        np.clip(RNG.lognormal(np.log(200), 0.55, n), 5.0, 400.0),
+        np.clip(RNG.lognormal(np.log(82),  0.48, n), 5.0, 400.0),
     )
 
-    base_hom = np.where(diag == 1, 0.32, 0.72)
+    # Homogeneidad: gradiente T1(0.60)→T4(0.18) para cáncer; 0.72 para sano.
+    hom_base_full = np.full(n, 0.72)
+    hom_base_full[cancer_idx] = hom_base_c
+
     coef_c   = np.where(diag == 1, 0.003, 0.002)
     coef_e   = np.where(diag == 1, 0.016, 0.007)
     umbral_c = np.where(diag == 1, 30.0, 12.0)
     umbral_e = np.where(diag == 1, 5.0,   4.0)
     hom_raw = (
-        RNG.normal(base_hom, 0.10, n)
+        RNG.normal(hom_base_full, 0.10, n)
         - coef_c * np.maximum(contrast - umbral_c, 0)
         - coef_e * np.maximum(entropy  - umbral_e, 0)
     )
 
-    sph_raw  = np.where(diag == 1,
-                        RNG.normal(0.62, 0.13, n),
-                        RNG.normal(0.73, 0.13, n))
+    # Esfericidad: gradiente T1(regular)→T4(muy irregular); 0.73 para sano.
+    sph_mu_full = np.full(n, 0.73)
+    sph_mu_full[cancer_idx] = sph_mu_c
+    sph_raw = RNG.normal(sph_mu_full, 0.12, n)
 
-    skew_raw = np.where(diag == 1,
-                        RNG.normal(0.85, 0.40, n),
-                        RNG.normal(0.05, 0.48, n))
+    # Asimetría: gradiente T1(leve)→T4(extrema por necrosis masiva); ~0 para sano.
+    skew_mu_full = np.full(n, 0.05)
+    skew_mu_full[cancer_idx] = skew_mu_c
+    skew_raw = RNG.normal(skew_mu_full, 0.42, n)
 
     df_out = pd.DataFrame({
         "Patient_ID":                df["Patient_ID"].values,
@@ -189,34 +236,26 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
     })
 
     # ── Ruido biológico — zona gris clínica ────────────────────────────────────
-    # CRC estadio temprano (~12%): CEA < 3 ng/mL y Hgb preservada (NCCN 2023).
-    c_idx     = df_out.index[df_out["Diagnosis"] == 1].to_numpy()
-    n_early   = max(1, int(len(c_idx) * 0.12))
-    early_idx = RNG.choice(c_idx, size=n_early, replace=False)
+    # Los estadios T1 tempranos están modelados explícitamente en el bloque de
+    # estadificación (18% del grupo cáncer): no se sobreescriben aquí.
 
-    df_out.loc[early_idx, "CEA_Level_ng_mL"]          = RNG.lognormal(np.log(1.7), 0.45, n_early).clip(0.5,  3.0).round(2)
-    df_out.loc[early_idx, "Hemoglobin_g_dL"]           = RNG.normal(14.2,    1.00, n_early).clip(13.5, 17.5).round(2)
-    df_out.loc[early_idx, "PyRad_ADC_Mean"]            = RNG.normal(1430.0, 190.0, n_early).clip(1000.0, 1900.0).round(2)
-    df_out.loc[early_idx, "PyRad_ADC_Std"]             = RNG.normal(105.0,   35.0, n_early).clip(20.0, 260.0).round(2)
-    df_out.loc[early_idx, "PyRad_Entropy"]             = RNG.normal(4.8,      1.0, n_early).clip(2.5,  6.5).round(4)
-    df_out.loc[early_idx, "PyRad_GLCM_Contrast"]       = RNG.normal(22.0,     8.0, n_early).clip(8.0, 50.0).round(4)
-    df_out.loc[early_idx, "PyRad_GLCM_Homogeneity"]    = RNG.normal(0.60,    0.11, n_early).clip(0.35, 0.90).round(4)
-    df_out.loc[early_idx, "PyRad_Shape_Sphericity"]    = RNG.normal(0.75,    0.09, n_early).clip(0.50, 1.00).round(4)
-    df_out.loc[early_idx, "PyRad_FirstOrder_Skewness"] = RNG.normal(0.04,    0.38, n_early).round(4)
-
-    # Inflamación severa (~12% de sanos): EII activa o diverticulitis eleva CEA y restringe ADC (ESGAR 2022).
+    # Inflamación severa multi-feature (~14% de sanos): EII activa, diverticulitis o
+    # apendicitis eleva CEA, baja Hgb y restringe ADC simultáneamente (ESGAR 2022).
+    # Al afectar MÚLTIPLES features a la vez, crea casos genuinamente ambiguos
+    # que el modelo no puede resolver con certeza → probabilidades 25-55%.
     h_idx      = df_out.index[df_out["Diagnosis"] == 0].to_numpy()
-    n_inflam   = max(1, int(len(h_idx) * 0.12))
+    n_inflam   = max(1, int(len(h_idx) * 0.14))
     inflam_idx = RNG.choice(h_idx, size=n_inflam, replace=False)
 
-    df_out.loc[inflam_idx, "CEA_Level_ng_mL"]          = RNG.lognormal(np.log(12.0), 0.55, n_inflam).clip(8.0, 60.0).round(2)
-    df_out.loc[inflam_idx, "PyRad_ADC_Mean"]           = RNG.normal(1180.0, 220.0, n_inflam).clip(700.0, 1700.0).round(2)
-    df_out.loc[inflam_idx, "PyRad_ADC_Std"]            = RNG.normal(170.0,   55.0, n_inflam).clip(40.0, 380.0).round(2)
-    df_out.loc[inflam_idx, "PyRad_Entropy"]            = RNG.normal(6.3,      1.0, n_inflam).clip(4.5, 9.5).round(4)
-    df_out.loc[inflam_idx, "PyRad_GLCM_Contrast"]      = RNG.normal(48.0,    14.0, n_inflam).clip(22.0, 120.0).round(4)
-    df_out.loc[inflam_idx, "PyRad_GLCM_Homogeneity"]   = RNG.normal(0.32,    0.10, n_inflam).clip(0.08, 0.52).round(4)
-    df_out.loc[inflam_idx, "PyRad_Shape_Sphericity"]   = RNG.normal(0.60,    0.12, n_inflam).clip(0.25, 0.88).round(4)
-    df_out.loc[inflam_idx, "PyRad_FirstOrder_Skewness"] = RNG.normal(0.38,   0.45, n_inflam).round(4)
+    df_out.loc[inflam_idx, "CEA_Level_ng_mL"]          = RNG.lognormal(np.log(11.0), 0.60, n_inflam).clip(5.0, 55.0).round(2)
+    df_out.loc[inflam_idx, "Hemoglobin_g_dL"]          = RNG.normal(11.2, 1.50, n_inflam).clip(7.5, 13.8).round(2)
+    df_out.loc[inflam_idx, "PyRad_ADC_Mean"]           = RNG.normal(1200.0, 240.0, n_inflam).clip(700.0, 1750.0).round(2)
+    df_out.loc[inflam_idx, "PyRad_ADC_Std"]            = RNG.normal(175.0,   60.0, n_inflam).clip(40.0, 380.0).round(2)
+    df_out.loc[inflam_idx, "PyRad_Entropy"]            = RNG.normal(6.1,      1.1, n_inflam).clip(4.0, 9.5).round(4)
+    df_out.loc[inflam_idx, "PyRad_GLCM_Contrast"]      = RNG.normal(46.0,    15.0, n_inflam).clip(20.0, 120.0).round(4)
+    df_out.loc[inflam_idx, "PyRad_GLCM_Homogeneity"]   = RNG.normal(0.34,    0.11, n_inflam).clip(0.08, 0.56).round(4)
+    df_out.loc[inflam_idx, "PyRad_Shape_Sphericity"]   = RNG.normal(0.61,    0.13, n_inflam).clip(0.25, 0.88).round(4)
+    df_out.loc[inflam_idx, "PyRad_FirstOrder_Skewness"] = RNG.normal(0.35,   0.48, n_inflam).round(4)
 
     # Variabilidad de laboratorio e imagen (18% de sanos): artefactos y diferencias de equipo.
     sanos_idx = df_out.index[df_out["Diagnosis"] == 0].to_numpy()
@@ -244,11 +283,6 @@ def generar_features_clinicas(df_base: pd.DataFrame) -> pd.DataFrame:
     df_out.loc[idx_d, "PyRad_GLCM_Contrast"] = (
         (df_out.loc[idx_d, "PyRad_GLCM_Contrast"] + RNG.normal(10.0, 4.0, len(idx_d))).clip(0.1, 120.0).round(4)
     )
-
-    # Inversión de etiqueta (12%): simula casos ambiguos y fija el techo teórico de AUC ≈ 0.88.
-    np.random.seed(42)
-    swap_mask = np.random.rand(len(df_out)) < 0.12
-    df_out.loc[swap_mask, "Diagnosis"] = 1 - df_out.loc[swap_mask, "Diagnosis"]
 
     print(f"Dataset generado: {len(df_out):,} pacientes | "
           f"{int(df_out['Diagnosis'].sum()):,} cancer / "

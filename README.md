@@ -1,16 +1,16 @@
 ﻿# CRC-Diagnostic — Módulo de Diagnóstico Clínico-Tumoral
 
-Sistema de ayuda al diagnóstico de **Cáncer Colorrectal (CCR)** basado en XGBoost, optimización bayesiana con Optuna y explicabilidad médica con SHAP. Opera sobre biomarcadores hematológicos (CEA, Hemoglobina) y features radiómicas (ADC, Entropía, GLCM…) generadas sintéticamente a partir de distribuciones multivariantes calibradas con guías clínicas reales (NCCN 2023, ESGAR 2022). El resultado se expone a través de un dashboard interactivo en Streamlit.
+Sistema de ayuda al diagnóstico de **Cáncer Colorrectal (CCR)** basado en XGBoost, optimización bayesiana con Optuna, calibración por **Temperature Scaling** y explicabilidad médica con SHAP. Opera sobre biomarcadores hematológicos (CEA, Hemoglobina) y features radiómicas (ADC, Entropía, GLCM…) generadas sintéticamente con estadificación T1–T4 calibrada con guías clínicas reales (NCCN 2023, ESGAR 2022, Gollub 2018). El resultado se expone a través de un dashboard interactivo en Streamlit.
 
 ---
 
 ## Objetivos
 
-- **Generar datos sintéticos** biológicamente realistas con distribuciones multivariantes e inyección de un 12 % de ruido biológico (Falsos Negativos y Positivos clínicos), evitando la separabilidad perfecta y el data leakage.
+- **Generar datos sintéticos** biológicamente realistas con distribuciones multivariantes **estadificadas por estadio T1–T4**, solapamiento clínico real en estadios tempranos y casos inflamatorios benignos multi-feature.
 - **Justificar la elección de XGBoost** mediante benchmark empírico frente a Regresión Logística, KNN, Random Forest y MLP.
-- **Entrenar un clasificador XGBoost de producción** optimizado con Optuna y umbral de decisión ajustado para maximizar Recall ≥ 0.90.
-- **Exportar un paquete de inferencia** (`.pkl`) listo para producción, verificado automáticamente antes del despliegue.
-- **Exponer el modelo** en un dashboard interactivo (Streamlit) con diagnóstico en vivo y explicabilidad SHAP por paciente.
+- **Entrenar un clasificador XGBoost de producción** optimizado con Optuna, umbral de decisión ajustado para Recall ≥ 0.90, y **calibración de probabilidades por Temperature Scaling** (Guo et al., ICML 2017).
+- **Exportar un paquete de inferencia** (`.pkl`) listo para producción con modelo calibrado, modelo raw para SHAP, umbral y nombres de features.
+- **Exponer el modelo** en un dashboard interactivo (Streamlit) con diagnóstico en vivo, probabilidades clínicamente interpretables y explicabilidad SHAP por paciente.
 
 ---
 
@@ -18,14 +18,15 @@ Sistema de ayuda al diagnóstico de **Cáncer Colorrectal (CCR)** basado en XGBo
 
 | Métrica | Valor |
 |---|---|
-| ROC-AUC | 0.8782 |
-| Recall (Sensibilidad) | 0.8965 |
-| Precisión | 0.7940 |
-| F1-Score | 0.8421 |
-| Especificidad (TNR) | 0.7676 |
+| ROC-AUC | 0.9743 |
+| Recall (Sensibilidad) | 0.9784 |
+| Precisión | 0.7800 |
+| F1-Score | 0.8653 |
 | Umbral de decisión | 0.20 |
+| Temperatura de calibración | 1.50 |
+| Rango de probabilidades | 5 % – 95 % |
 
-El techo de ~0.88 AUC no es un fallo: está diseñado deliberadamente para reflejar la ambigüedad clínica real. Ver [`justificacion_datos_sinteticos.md`](justificacion_datos_sinteticos.md) para la justificación completa.
+El AUC de 0.974 refleja un dataset con solapamiento clínico real entre estadios T1/T2 y tejido benigno inflamado. Ver [`justificacion_datos_sinteticos.md`](justificacion_datos_sinteticos.md) para la justificación completa.
 
 ---
 
@@ -35,24 +36,24 @@ El techo de ~0.88 AUC no es un fallo: está diseñado deliberadamente para refle
 CRC-Diagnostic/
 ├── app.py                                   # Dashboard Streamlit (Endo-AID)
 ├── requirements.txt
-├── explicacion_optuna_shap.md               # Documentación: Optuna y SHAP
-├── justificacion_datos_sinteticos.md        # Documentación: techo biológico 88%
+├── explicacion_optuna_shap.md               # Documentación: Optuna, SHAP y Temperature Scaling
+├── justificacion_datos_sinteticos.md        # Documentación: estadificación T1-T4 y realismo clínico
 ├── justificacion_xgboost_vs_alternativas.md # Documentación: benchmark de modelos
 ├── Data/
 │   ├── processed/
-│   │   └── dataset_clinico_tumoral.csv      # ~335 000 pacientes sintéticos (11 features)
-│   └── raw/                                 # Datasets base originales
+│   │   └── dataset_clinico_tumoral.csv      # ~335 000 pacientes sintéticos (11 features) [gitignored]
+│   └── raw/
+│       └── colorectal_cancer_full_dataset_v1.csv  # Dataset base de entrada
 ├── Data_cleaning/
-│   └── clinical_data_generator.py          # Motor de síntesis multivariante
+│   └── clinical_data_generator.py          # Motor de síntesis multivariante con staging T1-T4
 └── model/
-    ├── artifacts/
-    │   ├── xgb_clinical_model.json          # Hiperparámetros óptimos Optuna
-    │   ├── xgb_inference_package.pkl        # Paquete de inferencia: modelo + umbral + feature_names
-    │   └── inspection_plots/                # Gráficos de evaluación + inspection_metrics.json
-    ├── check_features.py                    # Auditoría anti-data leakage
-    ├── compare_models.py                    # Benchmark 5 clasificadores (justifica XGBoost)
-    ├── inspect_inference_package.py         # Verificación del paquete de producción
-    └── xgb_clinical_model.py                # Pipeline MLOps completo (Optuna → SHAP → PKL)
+    ├── calibration.py                       # Temperature Scaling — NECESARIO para deserializar el PKL
+    ├── inspect_inference_package.py         # Regenera plots/métricas para la app (llamado por app.py)
+    ├── xgb_clinical_model.py                # Pipeline completo: Optuna → XGBoost → calibración → PKL
+    └── artifacts/                           # Generados en runtime [gitignored]
+        ├── xgb_clinical_model.json          # Pesos XGBoost exportados
+        ├── xgb_inference_package.pkl        # Paquete de inferencia: model + model_raw + threshold + feature_names
+        └── inspection_plots/                # Gráficos de evaluación + inspection_metrics.json
 ```
 
 ---
@@ -77,63 +78,38 @@ pip install -r requirements.txt
 
 ### 1. Generación del dataset sintético
 
-Genera `Data/processed/dataset_clinico_tumoral.csv` con ~335 000 pacientes a partir de distribuciones multivariantes calibradas con NCCN 2023 y ESGAR 2022.
+Genera `Data/processed/dataset_clinico_tumoral.csv` con ~335 000 pacientes a partir de distribuciones multivariantes **estadificadas por T1–T4** calibradas con NCCN 2023, ESGAR 2022 y Gollub 2018.
 
 ```bash
 python Data_cleaning/clinical_data_generator.py
 ```
 
----
-
-### 2. Auditoría anti-data leakage
-
-Comprueba que ninguna feature separa perfectamente a sanos de enfermos por sí sola.
-
-```bash
-python model/check_features.py
-```
-
-> Resultado esperado: cero variables con separación perfecta.
+Produce un dataset balanceado (50/50) con solapamiento clínico real: T1 solapado con sanos, T2 con zona gris, T3/T4 claramente separados. El 14 % de los sanos recibe perturbaciones multi-feature de inflamación severa (EII, diverticulitis).
 
 ---
 
-### 3. Benchmark de clasificadores
+### 2. Entrenamiento MLOps
 
-Evalúa cinco algoritmos (Regresión Logística, KNN, Random Forest, MLP, XGBoost) mediante validación cruzada estratificada (5-fold) y justifica empíricamente la elección de XGBoost.
+Ejecuta el pipeline completo en un solo comando:
 
-```bash
-python model/compare_models.py
-```
-
-> Ver [`justificacion_xgboost_vs_alternativas.md`](justificacion_xgboost_vs_alternativas.md) para los resultados y el análisis completo.
-
----
-
-### 4. Entrenamiento MLOps
-
-Ejecuta el pipeline completo: búsqueda bayesiana de hiperparámetros (Optuna, 30 trials, 5-fold CV), entrenamiento final, optimización de umbral, gráficos SHAP y exportación del paquete de inferencia.
+1. Optuna TPE — 30 trials, CV 5-fold estratificado → hiperparámetros óptimos
+2. XGBoost final sobre el 68 % de los datos (fit set)
+3. **Temperature Scaling** — encuentra T óptima sobre el 12 % de calibración (mínimo clínico T=1.5)
+4. Búsqueda de umbral óptimo con `recall_objetivo=0.90`, `umbral_maximo=0.20`
+5. Evaluación en test set (20 %) + gráficos SHAP
+6. Exportación del paquete de inferencia
 
 ```bash
 python model/xgb_clinical_model.py
 ```
 
-> Salida: `model/artifacts/xgb_inference_package.pkl` y `model/artifacts/xgb_clinical_model.json`.
+> Salida: `model/artifacts/xgb_inference_package.pkl` con claves `model` (calibrado), `model_raw` (para SHAP), `threshold` y `feature_names`.
 
 ---
 
-### 5. Verificación del paquete de producción
+### 3. Dashboard interactivo
 
-Valida la integridad del PKL, recalcula métricas sobre el test set y genera los gráficos de evaluación.
-
-```bash
-python model/inspect_inference_package.py
-```
-
-> Salida: `model/artifacts/inspection_plots/` con cuatro PNGs y `inspection_metrics.json`.
-
----
-
-### 6. Dashboard interactivo
+`app.py` arranca autónomamente: si los plots de inspección no existen, los regenera llamando a `inspect_inference_package.py` antes de mostrar la interfaz.
 
 ```bash
 streamlit run app.py
@@ -143,9 +119,37 @@ Abre `http://localhost:8501`. El dashboard tiene tres pestañas:
 
 | Pestaña | Contenido |
 |---|---|
-| Diagnóstico en Vivo | Formulario de 11 variables clínicas · indicador de riesgo · gráfico SHAP local por paciente |
-| Análisis y Rendimiento | Métricas del modelo · galería de 4 gráficos de evaluación |
-| Documentación Técnica | Justificación del techo biológico · hiperparámetros Optuna · explicación SHAP · referencias |
+| Diagnóstico en Vivo | Formulario de 11 variables clínicas · probabilidad calibrada (5–95 %) · gráfico SHAP local |
+| Análisis y Rendimiento | Métricas del modelo · galería de gráficos de evaluación · distribución de probabilidades |
+| Documentación Técnica | Estadificación T1–T4 · Temperature Scaling · Optuna · SHAP · referencias |
+
+---
+
+## Flujo de scripts
+
+```
+clinical_data_generator.py
+    └─ Lee Data/raw/*.csv
+    └─ Genera Data/processed/dataset_clinico_tumoral.csv
+           │
+           ▼
+xgb_clinical_model.py
+    └─ Optuna 30 trials (CV 5-fold)  →  mejores hiperparámetros
+    └─ XGBoost fit (68 % datos)
+    └─ Temperature Scaling (12 % calibración)  →  T=1.5
+    └─ Búsqueda umbral (umbral_maximo=0.20)   →  threshold=0.20
+    └─ SHAP beeswarm + barplot
+    └─ PKL: {model, model_raw, threshold, feature_names}
+           │
+           ▼
+app.py  (Streamlit)
+    └─ Importa calibration.ModeloCalibraado  (necesario antes de joblib.load)
+    └─ Si faltan plots → llama inspect_inference_package.main()
+    └─ Carga PKL  →  model (calibrado), model_raw (SHAP)
+    └─ Tab 1: predicción en vivo con SHAP local
+    └─ Tab 2: métricas + plots de inspección
+    └─ Tab 3: documentación técnica
+```
 
 ---
 
@@ -154,6 +158,7 @@ Abre `http://localhost:8501`. El dashboard tiene tres pestañas:
 | Componente | Librería | Versión mínima |
 |---|---|---|
 | Clasificador | XGBoost | 2.0 |
+| Calibración | scipy (minimize_scalar) | 1.11 |
 | Optimización | Optuna (TPE) | 3.6 |
 | Explicabilidad | SHAP | 0.45 |
 | ML general | scikit-learn | 1.4 |
@@ -166,7 +171,11 @@ Abre `http://localhost:8501`. El dashboard tiene tres pestañas:
 
 ## Documentación de Diseño
 
-- [`justificacion_datos_sinteticos.md`](justificacion_datos_sinteticos.md) — Por qué el modelo toca un techo de ~0.88 AUC y qué certifica ese límite.
+- [`justificacion_datos_sinteticos.md`](justificacion_datos_sinteticos.md) — Estadificación T1–T4, solapamiento clínico real y variabilidad biológica.
 - [`justificacion_xgboost_vs_alternativas.md`](justificacion_xgboost_vs_alternativas.md) — Comparativa cuantitativa de los cinco modelos del benchmark.
-- [`explicacion_optuna_shap.md`](explicacion_optuna_shap.md) — Funcionamiento interno de la búsqueda bayesiana y los SHAP values.
+- [`explicacion_optuna_shap.md`](explicacion_optuna_shap.md) — Optuna TPE, SHAP TreeExplainer y Temperature Scaling
+
+- [`justificacion_datos_sinteticos.md`](justificacion_datos_sinteticos.md) — Estadificación T1–T4, solapamiento clínico real y variabilidad biológica.
+- [`justificacion_xgboost_vs_alternativas.md`](justificacion_xgboost_vs_alternativas.md) — Comparativa cuantitativa de los cinco modelos del benchmark.
+- [`explicacion_optuna_shap.md`](explicacion_optuna_shap.md) — Optuna TPE, SHAP TreeExplainer y Temperature Scaling.
 

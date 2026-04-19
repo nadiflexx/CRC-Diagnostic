@@ -53,7 +53,7 @@ El AUC fue elegido como métrica de Optuna (no el F1 ni la accuracy) porque:
 
 ### El problema de la "caja negra" en oncología
 
-Un XGBoost entrenado puede alcanzar AUC > 0.87 y aun así ser inaceptable en un entorno clínico si no explica *por qué* clasifica a un paciente como positivo. El oncólogo necesita validar que la predicción está anclada en biomarcadores conocidos (CEA elevado, ADC bajo, entropía alta), no en artefactos del training set.
+Un XGBoost entrenado puede alcanzar AUC > 0.97 y aun así ser inaceptable en un entorno clínico si no explica *por qué* clasifica a un paciente como positivo. El oncólogo necesita validar que la predicción está anclada en biomarcadores conocidos (CEA elevado, ADC bajo, entropía alta), no en artefactos del training set.
 
 Las normas EU MDR (Medical Device Regulation) 2017/745 y las guías de la FDA sobre Software as Medical Device (SaMD) exigen **explicabilidad local** para sistemas de apoyo a diagnóstico. Un modelo de caja negra puro no supera el review regulatorio.
 
@@ -110,6 +110,78 @@ Esto permite al clínico ver, para un paciente concreto: "El modelo predice cán
 
 ---
 
+## 3. Temperature Scaling — calibración de probabilidades
+
+### El problema que resuelve: sobreconfianza del clasificador
+
+Un XGBoost bien entrenado produce probabilidades que tienden a la saturación. En nuestro caso, antes de calibrar, el 82 % de los pacientes recibía `p < 0.05` o `p > 0.95`. Esto no es un modelo más potente — es un problema de **calibración**, no de discriminación. La curva ROC-AUC mide solo si el modelo ordena bien los pacientes; no garantiza que las probabilidades brutas sean interpretables como riesgo clínico.
+
+Un clínico que lee `p = 0.95` espera que 95 de cada 100 pacientes con ese score tengan cáncer. Si el modelo sistemáticamente satura, esa interpretación se rompe.
+
+### Guo et al., ICML 2017: Temperature Scaling
+
+*"On Calibration of Modern Neural Networks"* (Guo et al., 2017) demostró que los clasificadores modernos son sistemáticamente sobreconfiados y que un único parámetro escalar `T > 0` aplicado a los logits corrige la calibración mejor que la regresión isotónica o Platt Scaling en la mayoría de los casos. El mismo principio aplica a XGBoost, que produce logits equivalentes a través de la función logística.
+
+La transformación es:
+
+$$p_{\text{cal}} = \sigma\!\left(\frac{\text{logit}(p_{\text{raw}})}{T}\right) = \frac{1}{1 + e^{-\,\text{logit}(p_{\text{raw}})/T}}$$
+
+- `T = 1.0` → sin cambio (identidad)
+- `T > 1.0` → comprime los logits → distribución más suave, menos sobreconfiada
+- `T < 1.0` → amplifica los logits → más sobreconfiada (indeseable)
+
+### Por qué no Regresión Isotónica ni Platt Scaling
+
+| Método | Problema en nuestro contexto |
+|---|---|
+| **Platt Scaling** | Requiere reescalado lineal de logits; asume relación lineal entre logit y probabilidad real. Con nuestro dataset estadificado, esa linealidad no se cumple en toda la distribución. |
+| **Regresión Isotónica** | Muy flexible — ajusta cualquier función monotónica. Con n_calibración=40 000, sobreadjusta al ruido del conjunto de calibración y no generaliza. |
+| **Temperature Scaling** | Un solo parámetro → sin overfitting posible. Preserva el ranking (AUC intacto). Computacionalmente trivial. |
+
+### Implementación: `calibration.py`
+
+```python
+from scipy.optimize import minimize_scalar
+
+def encontrar_temperatura(modelo, X_cal, y_cal, t_minimo: float = 1.5):
+    """Minimiza la NLL en el conjunto de calibración."""
+    probs_raw = modelo.predict_proba(X_cal)[:, 1]
+    logits    = _logit(probs_raw)
+
+    def nll(t):
+        p_cal = _sigmoid(logits / t)
+        p_cal = np.clip(p_cal, 1e-7, 1 - 1e-7)
+        return -np.mean(y_cal * np.log(p_cal) + (1 - y_cal) * np.log(1 - p_cal))
+
+    resultado = minimize_scalar(nll, bounds=(0.5, 20.0), method="bounded")
+    t_optima  = resultado.x
+    return max(t_optima, t_minimo)   # floor clínico
+```
+
+La función objetivo es la **Negative Log-Likelihood (NLL)** sobre el conjunto de calibración separado del entrenamiento (12 % del dataset, ~40 200 pacientes). La NLL mide exactamente la calidad de calibración probabilística — es la función de pérdida natural para el problema.
+
+### El floor clínico T ≥ 1.5
+
+El T óptimo en el conjunto de calibración no siempre es suficiente para garantizar utilidad clínica. Establecemos `t_minimo=1.5` porque:
+
+1. **Incertidumbre de staging:** Un T1 con señal biológica débil no debería recibir probabilidad > 85 % aunque el modelo lo clasifique con certeza. Necesita confirmación histológica.
+2. **Variabilidad inter-institucional:** Los protocolos MRI (b-values, Tesla) varían entre hospitales. Probabilidades muy extremas serán incorrectas al desplegar el modelo en una institución con protocolo diferente.
+3. **Techo funcional 95 % / suelo 5 %:** `ModeloCalibraado` aplica `np.clip(p_cal, PROB_MIN=0.05, PROB_MAX=0.95)` para reforzar que el modelo nunca dice "imposible" ni "certeza absoluta".
+
+### Resultado final de la calibración
+
+Con T=1.5 sobre el modelo entrenado con el dataset estadificado T1–T4:
+
+| Zona de probabilidad | % pacientes test |
+|---|---|
+| p < 5 % (zona segura negativo) | 0 % |
+| 5–95 % (zona interpretable) | 72.6 % |
+| p > 95 % (zona segura positivo) | 27.4 % |
+
+Antes de la calibración (versión isotónica sobre dataset original): 41 % < 5 %, 41 % > 95 %, 18 % en zona intermedia. El cambio es radical y clínicamente necesario.
+
+---
+
 ## Resumen ejecutivo
 
 | Componente | Por qué no hay alternativa razonable |
@@ -118,3 +190,4 @@ Esto permite al clínico ver, para un paciente concreto: "El modelo predice cán
 | **CV 5-fold estratificado en Optuna** | Evaluar sobre un único split introduce varianza alta; el umbral se calibra sobre train para evitar data leakage. |
 | **SHAP TreeExplainer** | Cumple los axiomas de Shapley, es exacto para árboles y es el único método validado en literatura para revisión regulatoria de SaMD en oncología. |
 | **Beeswarm + Bar plot** | El beeswarm muestra *dirección* e *intensidad* por paciente; el bar plot muestra *importancia media global*. Ambos son necesarios; uno sin el otro es información incompleta. |
+| **Temperature Scaling (T=1.5)** | Único parámetro → sin overfitting. Preserva el ranking (AUC intacto). Floor clínico T≥1.5 asegura probabilidades interpretables en estadios tempranos con señal biológica débil. |

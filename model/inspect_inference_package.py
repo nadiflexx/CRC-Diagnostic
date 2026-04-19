@@ -66,6 +66,13 @@ def cargar_paquete(pkl_path: str) -> dict:
     if not os.path.exists(pkl_path):
         print("NO_PKL", pkl_path)
         raise SystemExit(1)
+    # Importar ModeloCalibraado ANTES de joblib.load para que pueda deserializar el PKL
+    import sys as _sys
+    _model_dir = os.path.dirname(os.path.abspath(pkl_path + "/../.."))
+    _this_dir  = os.path.dirname(os.path.abspath(__file__))
+    if _this_dir not in _sys.path:
+        _sys.path.insert(0, _this_dir)
+    importlib.import_module("calibration")
     pkg = joblib.load(pkl_path)
     if not isinstance(pkg, dict):
         raise ValueError("El archivo PKL no contiene un diccionario valido")
@@ -319,7 +326,8 @@ def main() -> None:
         None
     """
     pkg = cargar_paquete(PKL_PATH)
-    model = pkg.get("model")
+    model     = pkg.get("model")       # ModeloCalibraado — para predict_proba calibrado
+    model_raw = pkg.get("model_raw", model)  # XGBClassifier puro — para get_params, importancias, SHAP
     threshold = float(pkg.get("threshold", 0.5))
     feature_names = pkg.get("feature_names") or []
 
@@ -336,9 +344,9 @@ def main() -> None:
         "test_shape": (int(X_test.shape[0]), int(X_test.shape[1])),
         "metrics_test_recomputed": metricas,
         "model_params": {
-            "n_estimators": model.get_params().get("n_estimators"),
-            "max_depth": model.get_params().get("max_depth"),
-            "learning_rate": model.get_params().get("learning_rate"),
+            "n_estimators": model_raw.get_params().get("n_estimators"),
+            "max_depth": model_raw.get_params().get("max_depth"),
+            "learning_rate": model_raw.get_params().get("learning_rate"),
         },
     }
     pprint.pprint(info)
@@ -348,8 +356,8 @@ def main() -> None:
         json.dump(info, f, indent=2, ensure_ascii=False)
 
     plot_panel_evaluacion(y_test, y_prob, threshold, OUT_DIR)
-    plot_importancias_modelo(model, feature_names or list(X_test.columns), OUT_DIR)
-    plot_shap_si_disponible(model, X_test, feature_names or list(X_test.columns), OUT_DIR)
+    plot_importancias_modelo(model_raw, feature_names or list(X_test.columns), OUT_DIR)
+    plot_shap_si_disponible(model_raw, X_test, feature_names or list(X_test.columns), OUT_DIR)
 
     print("\nGraficos y metricas guardados en:")
     print(OUT_DIR)

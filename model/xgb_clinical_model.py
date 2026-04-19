@@ -37,6 +37,8 @@ from sklearn.metrics import (
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from xgboost import XGBClassifier
 
+from calibration import ModeloCalibraado, encontrar_temperatura
+
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -175,7 +177,8 @@ def entrenar_modelo_final(X_train: pd.DataFrame, y_train: pd.Series,
 
 def encontrar_umbral_optimo(modelo: XGBClassifier,
                             X_train: pd.DataFrame, y_train: pd.Series,
-                            recall_objetivo: float = 1.0) -> float:
+                            recall_objetivo: float = 1.0,
+                            umbral_maximo: float = 0.50) -> float:
     """Busca el mayor umbral de decisión que garantiza recall ≥ recall_objetivo.
 
     La calibración se realiza sobre el conjunto de entrenamiento para evitar
@@ -187,21 +190,23 @@ def encontrar_umbral_optimo(modelo: XGBClassifier,
         X_train: DataFrame de features de entrenamiento.
         y_train: Serie binaria de etiquetas de entrenamiento.
         recall_objetivo: Mínimo recall exigido (valor entre 0 y 1).
+        umbral_maximo: Límite superior de búsqueda del umbral. Fijar en 0.20
+            garantiza máxima sensibilidad clínica (mínimos falsos negativos).
 
     Returns:
         Umbral de decisión óptimo como float redondeado a dos decimales.
     """
     probs_train = modelo.predict_proba(X_train)[:, 1]
-    umbral_optimo = 0.50
+    umbral_optimo = umbral_maximo  # fallback: usar el máximo permitido
 
-    for t in np.arange(0.01, 0.51, 0.01):
+    for t in np.arange(0.01, umbral_maximo + 0.005, 0.01):
         preds_t = (probs_train >= t).astype(int)
         rec_t   = recall_score(y_train, preds_t, zero_division=0)
         if rec_t >= recall_objetivo:
             umbral_optimo = round(float(t), 2)
 
     print(f"  Umbral optimo encontrado: {umbral_optimo:.2f}  "
-          f"(recall_objetivo={recall_objetivo:.2f})")
+          f"(recall_objetivo={recall_objetivo:.2f}, umbral_maximo={umbral_maximo:.2f})")
     return umbral_optimo
 
 
@@ -341,7 +346,8 @@ if __name__ == "__main__":
             "csv": os.path.join(directorio_actual, "..", "Data", "processed", "dataset_clinico_tumoral.csv"),
             "dir_artefactos": os.path.join(directorio_actual, "artifacts"),
             "dir_plots": os.path.join(directorio_actual, "..", "Data", "processed", "plots"),
-            "recall_objetivo": 0.90
+            "recall_objetivo": 0.90,
+            "umbral_maximo":   0.20,   # techo clínico: no superar 20% → mínimos FN
         }
     print(f"  EXPERIMENTO {cfg['nombre']}  --  {cfg['csv']}")
 
@@ -349,23 +355,37 @@ if __name__ == "__main__":
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.20, random_state=42, stratify=y
     )
-    print(f"  Train: {len(X_train)}  |  Test: {len(X_test)}")
+    # Reservar 15 % del train como set de calibración (nunca visto por XGBoost)
+    X_train_fit, X_cal, y_train_fit, y_cal = train_test_split(
+        X_train, y_train, test_size=0.15, random_state=42, stratify=y_train
+    )
+    print(f"  Train: {len(X_train_fit)}  |  Calibracion: {len(X_cal)}  |  Test: {len(X_test)}")
 
     print("\n[Optuna] Buscando hiperparametros...")
-    mejores_params = buscar_hiperparametros(X_train, y_train, n_trials=30)
+    mejores_params = buscar_hiperparametros(X_train_fit, y_train_fit, n_trials=30)
 
     print("\n[Entrenamiento] Ajustando modelo final...")
-    modelo = entrenar_modelo_final(X_train, y_train, mejores_params)
+    modelo = entrenar_modelo_final(X_train_fit, y_train_fit, mejores_params)
 
-    print("\n[Umbral] Buscando umbral optimo en train...")
-    umbral = encontrar_umbral_optimo(modelo, X_train, y_train,
-                                     recall_objetivo=cfg["recall_objetivo"])
+    # Calibración por Temperature Scaling (Guo et al., ICML 2017):
+    # encuentra la temperatura T que minimiza la log-loss en el set de calibración.
+    # T > 1 divide los log-odds, aplastando la distribución hacia el centro y
+    # eliminando la sobreconfianza sin tocar la discriminación (AUC intacto).
+    print("\n[Calibracion] Buscando temperatura optima sobre set de calibracion...")
+    temperatura = encontrar_temperatura(modelo, X_cal, y_cal)
+    calibrador  = ModeloCalibraado(modelo, temperatura)
+    print(f"  Temperatura optima T = {temperatura:.4f}  (T>1 suaviza la distribucion)")
+
+    print("\n[Umbral] Buscando umbral optimo en set de calibracion...")
+    umbral = encontrar_umbral_optimo(calibrador, X_cal, y_cal,
+                                     recall_objetivo=cfg["recall_objetivo"],
+                                     umbral_maximo=cfg["umbral_maximo"])
 
     print("\n[Evaluacion] Metricas en test set:")
-    evaluar_modelo(modelo, X_test, y_test, umbral, cfg["dir_plots"])
+    evaluar_modelo(calibrador, X_test, y_test, umbral, cfg["dir_plots"])
 
     print("\n[SHAP] Generando graficos de explicabilidad...")
-    grafico_shap(modelo, X_test, nombres, cfg["dir_plots"])
+    grafico_shap(modelo, X_test, nombres, cfg["dir_plots"])   # modelo raw para TreeExplainer
 
     os.makedirs(cfg["dir_artefactos"], exist_ok=True)
     model_path = os.path.join(cfg["dir_artefactos"], "xgb_clinical_model.json")
@@ -373,11 +393,12 @@ if __name__ == "__main__":
     print(f"  Modelo guardado en: {model_path}")
 
     paquete_inferencia = {
-        "model":         modelo,
+        "model":         calibrador,   # probabilidades calibradas para la app
+        "model_raw":     modelo,       # XGBoost puro para SHAP
         "threshold":     umbral,
         "feature_names": nombres,
     }
-    pkl_path = os.path.join(cfg["dir_artefactos"], "xgb_inference_package.pkl")
+    pkl_path = os.path.join(cfg["dir_artefactos"], "xgb_tumoral_model_package.pkl")
     joblib.dump(paquete_inferencia, pkl_path)
     print(f"  Paquete PKL guardado en: {pkl_path}")
 
