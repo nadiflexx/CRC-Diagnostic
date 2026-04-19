@@ -164,13 +164,13 @@ def _chart_risk_timeline(df: pd.DataFrame) -> go.Figure:
                     y=df[col],
                     name=name,
                     mode="lines+markers",
-                    line=dict(color=color, width=width),
-                    marker=dict(
-                        color=color,
-                        size=8,
-                        symbol=symbol,
-                        line=dict(color="white", width=1.5),
-                    ),
+                    line={"color": color, "width": width},
+                    marker={
+                        "color": color,
+                        "size": 8,
+                        "symbol": symbol,
+                        "line": {"color": "white", "width": 1.5},
+                    },
                     hovertemplate=(
                         f"<b>{name}</b><br>"
                         "Fecha: %{x|%d/%m/%Y}<br>"
@@ -190,12 +190,12 @@ def _chart_risk_timeline(df: pd.DataFrame) -> go.Figure:
                     x=[row["date"]],
                     y=[score],
                     mode="markers",
-                    marker=dict(
-                        color=color,
-                        size=14,
-                        symbol="star",
-                        line=dict(color="white", width=1.5),
-                    ),
+                    marker={
+                        "color": color,
+                        "size": 14,
+                        "symbol": "star",
+                        "line": {"color": "white", "width": 1.5},
+                    },
                     name=f"Dx: {diag.title()}",
                     showlegend=False,
                     hovertemplate=(
@@ -206,28 +206,28 @@ def _chart_risk_timeline(df: pd.DataFrame) -> go.Figure:
             )
 
     fig.update_layout(
-        title=dict(
-            text="Evolución Longitudinal del Riesgo IA",
-            font=dict(size=14, color="#2d5a4e"),
-        ),
-        xaxis=dict(title="Fecha de Visita", tickformat="%d/%m/%Y", showgrid=False),
-        yaxis=dict(
-            title="Score de Riesgo",
-            tickformat=".0%",
-            range=[0, 1.05],
-            gridcolor="#f0f0f0",
-        ),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-        ),
+        title={
+            "text": "Evolución Longitudinal del Riesgo IA",
+            "font": {"size": 14, "color": "#2d5a4e"},
+        },
+        xaxis={"title": "Fecha de Visita", "tickformat": "%d/%m/%Y", "showgrid": False},
+        yaxis={
+            "title": "Score de Riesgo",
+            "tickformat": ".0%",
+            "range": [0, 1.05],
+            "gridcolor": "#f0f0f0",
+        },
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "right",
+            "x": 1,
+        },
         plot_bgcolor="white",
         paper_bgcolor="white",
         height=380,
-        margin=dict(l=10, r=80, t=60, b=10),
+        margin={"l": 10, "r": 80, "t": 60, "b": 10},
         hovermode="x unified",
     )
     return fig
@@ -255,29 +255,29 @@ def _chart_class_distribution(df: pd.DataFrame) -> go.Figure:
             labels=labels,
             values=values,
             hole=0.55,
-            marker=dict(colors=colors, line=dict(color="white", width=2)),
+            marker={"colors": colors, "line": {"color": "white", "width": 2}},
             textinfo="label+percent",
             hovertemplate="<b>%{label}</b><br>%{value} visitas<extra></extra>",
         )
     )
     fig.update_layout(
-        title=dict(
-            text="Distribución de Hallazgos Endoscópicos",
-            font=dict(size=13, color="#2d5a4e"),
-        ),
+        title={
+            "text": "Distribución de Hallazgos Endoscópicos",
+            "font": {"size": 13, "color": "#2d5a4e"},
+        },
         showlegend=False,
         height=320,
-        margin=dict(l=10, r=10, t=50, b=10),
+        margin={"l": 10, "r": 10, "t": 50, "b": 10},
         paper_bgcolor="white",
         annotations=[
-            dict(
-                text=f"<b>{sum(values)}</b><br>visitas",
-                x=0.5,
-                y=0.5,
-                font_size=14,
-                showarrow=False,
-                font_color="#2d5a4e",
-            )
+            {
+                "text": f"<b>{sum(values)}</b><br>visitas",
+                "x": 0.5,
+                "y": 0.5,
+                "font_size": 14,
+                "showarrow": False,
+                "font_color": "#2d5a4e",
+            }
         ],
     )
     return fig
@@ -329,7 +329,7 @@ def _chart_probability_heatmap(df: pd.DataFrame) -> go.Figure | None:
             zmax=1,
             text=[[f"{v:.0%}" for v in row] for row in z],
             texttemplate="%{text}",
-            textfont=dict(size=11),
+            textfont={"size": 11},
             hoverongaps=False,
             hovertemplate=(
                 "<b>%{y}</b><br>Visita: %{x}<br>Prob: %{z:.1%}<extra></extra>"
@@ -337,14 +337,14 @@ def _chart_probability_heatmap(df: pd.DataFrame) -> go.Figure | None:
         )
     )
     fig.update_layout(
-        title=dict(
-            text="Mapa de Probabilidades por Visita",
-            font=dict(size=13, color="#2d5a4e"),
-        ),
+        title={
+            "text": "Mapa de Probabilidades por Visita",
+            "font": {"size": 13, "color": "#2d5a4e"},
+        },
         height=260,
-        margin=dict(l=10, r=10, t=50, b=10),
+        margin={"l": 10, "r": 10, "t": 50, "b": 10},
         paper_bgcolor="white",
-        xaxis=dict(tickangle=-30, tickfont=dict(size=10)),
+        xaxis={"tickangle": -30, "tickfont": {"size": 10}},
     )
     return fig
 
@@ -394,8 +394,8 @@ def _chart_biomarkers(df: pd.DataFrame) -> go.Figure | None:
                 y=sub_df["hemoglobin"],
                 name="Hemoglobina (g/dL)",
                 mode="lines+markers",
-                line=dict(color=_C["purple"], width=2),
-                marker=dict(size=7, color=_C["purple"]),
+                line={"color": _C["purple"], "width": 2},
+                marker={"size": 7, "color": _C["purple"]},
                 hovertemplate="Hb: %{y:.1f} g/dL<extra></extra>",
             ),
             secondary_y=True,
@@ -412,17 +412,23 @@ def _chart_biomarkers(df: pd.DataFrame) -> go.Figure | None:
         )
 
     fig.update_layout(
-        title=dict(
-            text="Biomarcadores Analíticos (CEA · Hemoglobina)",
-            font=dict(size=13, color="#2d5a4e"),
-        ),
+        title={
+            "text": "Biomarcadores Analíticos (CEA · Hemoglobina)",
+            "font": {"size": 13, "color": "#2d5a4e"},
+        },
         height=320,
-        margin=dict(l=10, r=60, t=50, b=10),
+        margin={"l": 10, "r": 60, "t": 50, "b": 10},
         paper_bgcolor="white",
         plot_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "right",
+            "x": 1,
+        },
         hovermode="x unified",
-        xaxis=dict(showgrid=False, tickformat="%d/%m/%Y"),
+        xaxis={"showgrid": False, "tickformat": "%d/%m/%Y"},
     )
     fig.update_yaxes(title_text="CEA (ng/mL)", secondary_y=False, gridcolor="#f0f0f0")
     fig.update_yaxes(title_text="Hb (g/dL)", secondary_y=True, showgrid=False)
@@ -454,7 +460,7 @@ def _chart_ensemble_weights(df: pd.DataFrame) -> go.Figure | None:
             y=w_df["alpha"],
             name="α Modelo A (Contexto)",
             fill="tozeroy",
-            line=dict(color=_C["blue"], width=2),
+            line={"color": _C["blue"], "width": 2},
             fillcolor=_rgba(_C["blue"], 0.15),
             hovertemplate="α = %{y:.3f}<extra></extra>",
         )
@@ -465,23 +471,29 @@ def _chart_ensemble_weights(df: pd.DataFrame) -> go.Figure | None:
             y=w_df["beta"],
             name="β Modelo B (Tejido)",
             fill="tozeroy",
-            line=dict(color=_C["purple"], width=2),
+            line={"color": _C["purple"], "width": 2},
             fillcolor=_rgba(_C["purple"], 0.15),
             hovertemplate="β = %{y:.3f}<extra></extra>",
         )
     )
     fig.update_layout(
-        title=dict(
-            text="Pesos del Ensemble Adaptativo por Visita",
-            font=dict(size=13, color="#2d5a4e"),
-        ),
+        title={
+            "text": "Pesos del Ensemble Adaptativo por Visita",
+            "font": {"size": 13, "color": "#2d5a4e"},
+        },
         height=280,
-        yaxis=dict(title="Peso", range=[0, 1], gridcolor="#f0f0f0"),
-        xaxis=dict(showgrid=False, tickformat="%d/%m/%Y"),
+        yaxis={"title": "Peso", "range": [0, 1], "gridcolor": "#f0f0f0"},
+        xaxis={"showgrid": False, "tickformat": "%d/%m/%Y"},
         plot_bgcolor="white",
         paper_bgcolor="white",
-        margin=dict(l=10, r=10, t=50, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin={"l": 10, "r": 10, "t": 50, "b": 10},
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "right",
+            "x": 1,
+        },
         hovermode="x unified",
     )
     return fig
@@ -698,9 +710,9 @@ def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
         filtered = filtered[filtered["diagnosis"] == diag_filter]
 
     if colon_filter == "Con colonoscopia":
-        filtered = filtered[filtered["colonoscopy_performed"] == True]
+        filtered = filtered[filtered["colonoscopy_performed"]]
     elif colon_filter == "Sin colonoscopia":
-        filtered = filtered[filtered["colonoscopy_performed"] != True]
+        filtered = filtered[~filtered["colonoscopy_performed"]]
 
     return filtered.drop(columns=["_date"])
 
@@ -799,16 +811,16 @@ def render() -> None:
 
         # Row 1: Risk timeline (full width)
         if df["multimodal_score"].notna().any() or df["image_score"].notna().any():
-            st.plotly_chart(_chart_risk_timeline(df), use_container_width=True)
+            st.plotly_chart(_chart_risk_timeline(df), width="stretch")
 
         # Row 2: Donut + Heatmap
         col_donut, col_heat = st.columns([1, 2], gap="large")
         with col_donut:
-            st.plotly_chart(_chart_class_distribution(df), use_container_width=True)
+            st.plotly_chart(_chart_class_distribution(df), width="stretch")
         with col_heat:
             fig_heat = _chart_probability_heatmap(df)
             if fig_heat:
-                st.plotly_chart(fig_heat, use_container_width=True)
+                st.plotly_chart(fig_heat, width="stretch")
             else:
                 st.info("Sin datos de probabilidades para mostrar el mapa de calor.")
 
@@ -817,14 +829,14 @@ def render() -> None:
         with col_bio:
             fig_bio = _chart_biomarkers(df)
             if fig_bio:
-                st.plotly_chart(fig_bio, use_container_width=True)
+                st.plotly_chart(fig_bio, width="stretch")
             else:
                 st.info("Sin datos de biomarcadores (CEA / Hemoglobina).")
 
         with col_ens:
             fig_ens = _chart_ensemble_weights(df)
             if fig_ens:
-                st.plotly_chart(fig_ens, use_container_width=True)
+                st.plotly_chart(fig_ens, width="stretch")
             else:
                 st.info("Sin datos de pesos de ensemble suficientes.")
 

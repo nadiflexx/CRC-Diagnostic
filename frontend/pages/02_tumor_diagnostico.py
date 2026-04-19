@@ -210,7 +210,7 @@ def render() -> None:
 
         st.markdown("<br>", unsafe_allow_html=True)
         submitted = st.form_submit_button(
-            "🧠 Calcular Riesgo Oncológico", type="primary", use_container_width=True
+            "🧠 Calcular Riesgo Oncológico", type="primary", width="stretch"
         )
 
     # ── Results ──────────────────────────────────────────────────────────────
