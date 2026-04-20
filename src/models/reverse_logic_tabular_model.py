@@ -2,7 +2,7 @@
 Reverse Logic Tabular Model: Predicts Smoking_History and Alcohol_Consumption
 from clinical indicators (Age, Country, Gender, Cancer_Stage, Diet_Risk, etc.)
 
-Supports: XGBoost, Random Forest
+Supports: XGBoost, Random Forest, LightGBM
 """
 
 import pickle
@@ -27,6 +27,7 @@ from sklearn.model_selection import StratifiedKFold, cross_validate
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
 from xgboost import XGBClassifier
+import lightgbm as lgb
 
 
 class FeatureWeightedXGBClassifier(BaseEstimator, ClassifierMixin):
@@ -49,15 +50,20 @@ class FeatureWeightedXGBClassifier(BaseEstimator, ClassifierMixin):
         self.feature_weight_overrides = feature_weight_overrides
 
     def _build_preprocessor(self) -> ColumnTransformer:
+        transformers = [
+            ("num", StandardScaler(), self.numeric_features or []),
+        ]
+        
+        # Solo agregar transformador categorical si hay características categóricas
+        if self.categorical_features:
+            transformers.append((
+                "cat",
+                OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+                self.categorical_features,
+            ))
+        
         return ColumnTransformer(
-            transformers=[
-                ("num", StandardScaler(), self.numeric_features or []),
-                (
-                    "cat",
-                    OneHotEncoder(handle_unknown="ignore", sparse_output=False),
-                    self.categorical_features or [],
-                ),
-            ],
+            transformers=transformers,
             remainder="drop",
         )
 
@@ -139,9 +145,7 @@ class ReverseLogicTabularModel:
         """
         self.target = target
         self.numeric_features = numeric_features or ["Age"]
-        self.categorical_features = categorical_features or [
-            "Country", "Gender", "Physical_Activity", "Cancer_Stage", "Diet_Risk", "Obesity_BMI"
-        ]
+        self.categorical_features = categorical_features if categorical_features is not None else []
         self.random_seed = random_seed
 
         self.pipelines: Dict[str, Pipeline] = {}
@@ -199,19 +203,47 @@ class ReverseLogicTabularModel:
 
     def build_random_forest_pipeline(self, config: Dict[str, Any]) -> Pipeline:
         """Builds Random Forest pipeline."""
+        transformers = [
+            ("num", StandardScaler(), self.numeric_features),
+        ]
+        
+        # Solo agregar transformador categorical si hay características categóricas
+        if self.categorical_features:
+            transformers.append((
+                "cat",
+                OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+                self.categorical_features,
+            ))
+        
         preprocessor = ColumnTransformer(
-            transformers=[
-                ("num", StandardScaler(), self.numeric_features),
-                (
-                    "cat",
-                    OneHotEncoder(handle_unknown="ignore", sparse_output=False),
-                    self.categorical_features,
-                ),
-            ],
+            transformers=transformers,
             remainder="drop",
         )
 
         model = RandomForestClassifier(**config)
+
+        return Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
+
+    def build_lightgbm_pipeline(self, config: Dict[str, Any]) -> Pipeline:
+        """Builds LightGBM pipeline."""
+        transformers = [
+            ("num", StandardScaler(), self.numeric_features),
+        ]
+        
+        # Solo agregar transformador categorical si hay características categóricas
+        if self.categorical_features:
+            transformers.append((
+                "cat",
+                OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+                self.categorical_features,
+            ))
+        
+        preprocessor = ColumnTransformer(
+            transformers=transformers,
+            remainder="drop",
+        )
+
+        model = lgb.LGBMClassifier(**config)
 
         return Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
 
@@ -232,7 +264,7 @@ class ReverseLogicTabularModel:
         Args:
             X_train: Training features
             y_train: Training target (binary: Yes/No)
-            model_type: "xgboost" or "random_forest"
+            model_type: "xgboost", "random_forest", or "lightgbm"
             config: Model hyperparameters
             
         Returns:
@@ -246,8 +278,10 @@ class ReverseLogicTabularModel:
             pipeline = self.build_xgboost_pipeline((config or {}).copy())
         elif model_type == "random_forest":
             pipeline = self.build_random_forest_pipeline(config or {})
+        elif model_type == "lightgbm":
+            pipeline = self.build_lightgbm_pipeline(config or {})
         else:
-            raise ValueError(f"Unknown model_type: {model_type}. Supported: xgboost, random_forest")
+            raise ValueError(f"Unknown model_type: {model_type}. Supported: xgboost, random_forest, lightgbm")
 
         # Train
         pipeline.fit(X_train, y_train)

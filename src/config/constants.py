@@ -670,6 +670,31 @@ REVERSE_ANALYSIS_FEATURES = [
     "LDL_chole", "triglyceride", "hemoglobin", "urine_protein", "serum_creatinine",
     "SGOT_AST", "SGOT_ALT", "gamma_GTP", "BMI", "AST_ALT_ratio"
 ]
+
+REVERSE_ANALYSIS_SMOKE_FEATURES = [
+    "sex", "age", "height", "BMI", "weight", "waistline", "triglyceride", 
+    "HDL_chole", "LDL_chole", "hemoglobin",
+    # Engineered features
+    "waist_height_ratio", "hemoglobin_per_height"
+]
+
+REVERSE_ANALYSIS_DRINK_FEATURES = [
+    "age", "BMI", "waistline", "triglyceride", "HDL_chole", "LDL_chole",
+    "gamma_GTP", "SGOT_AST", "SGOT_ALT", "AST_ALT_ratio", "height",
+    # Engineered features
+    "waist_height_ratio", "gamma_GTP_log", "liver_index", "age_sex_interaction", "bmi_category"
+]
+
+# Engineered Features (calculated from raw features)
+REVERSE_ANALYSIS_ENGINEERED_FEATURES = [
+    "waist_height_ratio",
+    "hemoglobin_per_height",
+    "gamma_GTP_log",
+    "liver_index",
+    "age_sex_interaction",
+    "bmi_category",
+]
+
 REVERSE_DROP_FEATURES = ["sight_left", "sight_right", "hear_left", "hear_right"]
 
 # Biomarcadores específicos a analizar
@@ -683,10 +708,12 @@ REVERSE_ANALYSIS_TARGET_ALCOHOL = "DRK_YN"
 REVERSE_ANALYSIS_NUMERIC_FEATURES = [
     "age", "height", "weight", "waistline", "SBP", "DBP", "BLDS", "tot_chole", "HDL_chole",
     "LDL_chole", "triglyceride", "hemoglobin", "urine_protein", "serum_creatinine",
-    "SGOT_AST", "SGOT_ALT", "gamma_GTP", "BMI", "AST_ALT_ratio"
+    "SGOT_AST", "SGOT_ALT", "gamma_GTP", "BMI", "AST_ALT_ratio",
+    # Engineered numeric features
+    "waist_height_ratio", "hemoglobin_per_height", "gamma_GTP_log", "liver_index", "age_sex_interaction"
 ]
  
-REVERSE_ANALYSIS_CATEGORICAL_FEATURES = ["sex"]
+REVERSE_ANALYSIS_CATEGORICAL_FEATURES = ["sex", "bmi_category"]
  
 # Training Configuration
 REVERSE_ANALYSIS_RANDOM_SEED = 42
@@ -695,31 +722,109 @@ REVERSE_ANALYSIS_VAL_SIZE = 0.15
 REVERSE_ANALYSIS_CV_FOLDS = 5
  
 # Model Configurations XGBoost y Random Forest 
-REVERSE_ANALYSIS_XGBOOST_CONFIG = {
-    "n_estimators": 200, "max_depth": 5, "learning_rate": 0.08,
-    "subsample": 0.85, "colsample_bytree": 0.85, "objective": "binary:logistic",
-    "eval_metric": "logloss"
+# ─ Smoking History
+# SMOKING (SMK_stat_type_cd) → imbalanced (60/40)
+# Basado en: Davagdorj 2020 + Oh 2026 (cáncer gástrico NHIS) + Hwang 2024
+REVERSE_ANALYSIS_SMOKING_XGBOOST_CONFIG = {
+    "n_estimators": 500,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.85,
+    "reg_alpha": 0.1,
+    "reg_lambda": 1.0,
+    "objective": "binary:logistic",
+    "eval_metric": "aucpr",
+    "scale_pos_weight": 602431 / 388889,
 }
 
-REVERSE_ANALYSIS_XGBOOST_FEATURE_WEIGHTS = {
-    "sex": 0.60,
-    "age": 0.80,
+REVERSE_ANALYSIS_SMOKING_RANDOM_FOREST_CONFIG = {
+    "n_estimators": 400,
+    "max_depth": 10,
+    "class_weight": {0: 1.0, 1: 1.55},
+    "random_state": REVERSE_ANALYSIS_RANDOM_SEED,
+    "n_jobs": -1,
+    "min_samples_leaf": 5, # evita overfitting
+}
+
+# ─ Alcohol Consumption
+# ALCOHOL (DRK_YN) → casi balanceado + gamma_GTP dominante
+# Basado en: Dalal 2022 (enfermedad hepática) + Lee 2025 (diabetes NHIS)
+REVERSE_ANALYSIS_ALCOHOL_XGBOOST_CONFIG = {
+    "n_estimators": 500,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.85,
+    "reg_alpha": 0.5,
+    "reg_lambda": 1.5,
+    "objective": "binary:logistic",
+    "eval_metric": "aucpr",
+}
+
+REVERSE_ANALYSIS_ALCOHOL_RANDOM_FOREST_CONFIG = {
+    "n_estimators": 400,
+    "max_depth": 10,
+    "class_weight": "balanced",
+    "random_state": REVERSE_ANALYSIS_RANDOM_SEED,
+    "n_jobs": -1,
+    "min_samples_leaf": 5,
+}
+
+# ─ LightGBM (para Stacking)
+REVERSE_ANALYSIS_SMOKING_LIGHTGBM_CONFIG = {
+    "n_estimators": 300,
+    "max_depth": 7,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "num_leaves": 31,
+    "objective": "binary",
+    "metric": "auc",
+    "scale_pos_weight": 602431 / 388889,
+    "verbose": -1,
+}
+
+REVERSE_ANALYSIS_ALCOHOL_LIGHTGBM_CONFIG = {
+    "n_estimators": 300,
+    "max_depth": 7,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "num_leaves": 31,
+    "objective": "binary",
+    "metric": "auc",
+    "verbose": -1,
 }
  
-REVERSE_ANALYSIS_RANDOM_FOREST_CONFIG = {
-    "n_estimators": 200, "max_depth": 10, "class_weight": "balanced",
-    "random_state": REVERSE_ANALYSIS_RANDOM_SEED, "n_jobs": 1,
-}
+REVERSE_ANALYSIS_FEATURE_WEIGHTS = {}
+
+# ─ Optuna Hyperparameter Optimization
+REVERSE_ANALYSIS_USE_OPTUNA = False  # Set to True to enable Optuna tuning
+REVERSE_ANALYSIS_OPTUNA_TRIALS = 100  # Number of Optuna trials
+REVERSE_ANALYSIS_OPTUNA_TIMEOUT = 3600  # Timeout in seconds (1 hour)
  
 # Default Profile for Frontend Screening
 REVERSE_ANALYSIS_DEFAULT_PROFILE = {
-    "sex": "Male", "height": 175, "weight": 75, "waistline": 85.0,
+    "height": 175, "weight": 75, "waistline": 85.0,
     "SBP": 120.0, "DBP": 80.0, "BLDS": 100.0, "tot_chole": 190.0, "HDL_chole": 50.0,
     "LDL_chole": 110.0, "triglyceride": 120.0, "hemoglobin": 15.0, "urine_protein": 1.0,
     "serum_creatinine": 1.0, "SGOT_AST": 25.0, "SGOT_ALT": 25.0, "gamma_GTP": 30.0,
     "BMI": 24.49, "AST_ALT_ratio": 1.0
 }
  
-REVERSE_ANALYSIS_MODELS = ["xgboost", "random_forest"]
-REVERSE_ANALYSIS_MODEL_NAMES = {"xgboost": "XGBoost", "random_forest": "Random Forest"}
-REVERSE_ANALYSIS_COLORS = {"xgboost": "#1f77b4", "random_forest": "#2ca02c"}
+REVERSE_ANALYSIS_MODELS = ["xgboost", "random_forest", "lightgbm"]
+REVERSE_ANALYSIS_MODEL_NAMES = {
+    "xgboost": "XGBoost",
+    "random_forest": "Random Forest",
+    "lightgbm": "LightGBM"
+}
+REVERSE_ANALYSIS_COLORS = {
+    "xgboost": "#1f77b4",
+    "random_forest": "#2ca02c",
+    "lightgbm": "#ff7f0e"
+}
+
+# ─ Stacking Configuration
+REVERSE_ANALYSIS_USE_STACKING = True  # Enable XGBoost + LightGBM stacking
+REVERSE_ANALYSIS_STACKING_MODELS = ["xgboost", "lightgbm"]  # Models to stack

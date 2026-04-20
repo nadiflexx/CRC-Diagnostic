@@ -360,6 +360,41 @@ class MultiDatasetOrganizer:
         if 'DRK_YN' in df_clean.columns:
             df_clean['DRK_YN'] = df_clean['DRK_YN'].map({"Y": "Yes", "N": "No"})
 
+        # ═══════════════════════════════════════════════════════════════════════════
+        # ENGINEERED FEATURES (potentes para SMK y DRK)
+        # ═══════════════════════════════════════════════════════════════════════════
+        
+        # 1. waist_height_ratio: Fuerte para smoking
+        if {"waistline", "height"}.issubset(df_clean.columns):
+            valid_height = df_clean["height"].replace(0, np.nan)
+            df_clean["waist_height_ratio"] = df_clean["waistline"] / valid_height
+        
+        # 2. hemoglobin_per_height: Muy fuerte en SMK
+        if {"hemoglobin", "height"}.issubset(df_clean.columns):
+            valid_height = df_clean["height"].replace(0, np.nan)
+            df_clean["hemoglobin_per_height"] = df_clean["hemoglobin"] / valid_height
+        
+        # 3. gamma_GTP_log: Dominante en alcohol
+        if "gamma_GTP" in df_clean.columns:
+            df_clean["gamma_GTP_log"] = np.log1p(df_clean["gamma_GTP"])
+        
+        # 4. liver_index: Compuesto hepático (gamma + transaminasas)
+        if {"gamma_GTP", "SGOT_AST", "SGOT_ALT"}.issubset(df_clean.columns):
+            df_clean["liver_index"] = df_clean["gamma_GTP"] * (df_clean["SGOT_AST"] + df_clean["SGOT_ALT"])
+        
+        # 5. age_sex_interaction: Interacción edad * sexo
+        if {"age", "sex"}.issubset(df_clean.columns):
+            df_clean["age_sex_interaction"] = df_clean["age"] * (df_clean["sex"] == "Male").astype(int)
+        
+        # 6. bmi_category: Categoría BMI como feature (ordinal)
+        if "BMI" in df_clean.columns:
+            df_clean["bmi_category"] = pd.cut(
+                df_clean["BMI"],
+                bins=[0, 18.5, 25, 30, 100],
+                labels=[0, 1, 2, 3],
+                include_lowest=True
+            ).astype("int8")
+
         df_clean = df_clean.replace([np.inf, -np.inf], np.nan)
         df_clean = df_clean.dropna()
         

@@ -84,6 +84,7 @@ htmlcov/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+src/test/*
 
 # ============================================
 #  STREAMLIT

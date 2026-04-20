@@ -23,7 +23,10 @@ from src.config.paths import paths
 from src.models.reverse_logic_tabular_model import ReverseLogicTabularModel
 from src.evaluation.reverse_logic_analyzer import ReverseLogicAnalyzer
 from src.config.constants import (
+    REVERSE_ANALYSIS_FEATURE_WEIGHTS,
     REVERSE_ANALYSIS_FEATURES,
+    REVERSE_ANALYSIS_SMOKE_FEATURES,
+    REVERSE_ANALYSIS_DRINK_FEATURES,
     REVERSE_ANALYSIS_BIOMARKERS,
     REVERSE_ANALYSIS_NUMERIC_FEATURES,
     REVERSE_ANALYSIS_CATEGORICAL_FEATURES,
@@ -34,9 +37,14 @@ from src.config.constants import (
     REVERSE_ANALYSIS_VAL_SIZE,
     REVERSE_ANALYSIS_CV_FOLDS,
     REVERSE_ANALYSIS_MODELS,
-    REVERSE_ANALYSIS_XGBOOST_CONFIG,
-    REVERSE_ANALYSIS_XGBOOST_FEATURE_WEIGHTS,
-    REVERSE_ANALYSIS_RANDOM_FOREST_CONFIG,
+    REVERSE_ANALYSIS_SMOKING_XGBOOST_CONFIG,
+    REVERSE_ANALYSIS_SMOKING_RANDOM_FOREST_CONFIG,
+    REVERSE_ANALYSIS_SMOKING_LIGHTGBM_CONFIG,
+    REVERSE_ANALYSIS_ALCOHOL_XGBOOST_CONFIG,
+    REVERSE_ANALYSIS_ALCOHOL_RANDOM_FOREST_CONFIG,
+    REVERSE_ANALYSIS_ALCOHOL_LIGHTGBM_CONFIG,
+    REVERSE_ANALYSIS_USE_OPTUNA,
+    REVERSE_ANALYSIS_OPTUNA_TRIALS,
 )
 
 class ReverseLogicTrainer:
@@ -111,7 +119,17 @@ class ReverseLogicTrainer:
             df["DRK_YN"] = self._normalize_binary_target(df["DRK_YN"], "DRK_YN")
 
         # 3. Filtrar variables si excluimos biomarcadores
-        features_to_use = REVERSE_ANALYSIS_FEATURES.copy()
+        # Seleccionar features específicas según el target
+        if target == REVERSE_ANALYSIS_TARGET_SMOKING:
+            features_to_use = REVERSE_ANALYSIS_SMOKE_FEATURES.copy()
+            print(f"[OK] Using SMOKE features ({len(features_to_use)} features): {features_to_use}")
+        elif target == REVERSE_ANALYSIS_TARGET_ALCOHOL:
+            features_to_use = REVERSE_ANALYSIS_DRINK_FEATURES.copy()
+            print(f"[OK] Using DRINK features ({len(features_to_use)} features): {features_to_use}")
+        else:
+            features_to_use = REVERSE_ANALYSIS_FEATURES.copy()
+            print(f"[WARN] Using DEFAULT features for unknown target: {target}")
+        
         if self.exclude_biomarkers:
             features_to_use = [f for f in features_to_use if f not in REVERSE_ANALYSIS_BIOMARKERS]
             print(f"[WARN] Excluyendo biomarcadores: {REVERSE_ANALYSIS_BIOMARKERS}")
@@ -129,7 +147,7 @@ class ReverseLogicTrainer:
         X = df[features_to_use].copy()
         y = df[target].copy()
 
-        # Split logic (Train/Val/Test) - Igual que en tu script original
+        # Split logic (Train/Val/Test)
         X_train, X_temp, y_train, y_temp = train_test_split(
             X, y, test_size=(REVERSE_ANALYSIS_VAL_SIZE + REVERSE_ANALYSIS_TEST_SIZE),
             random_state=self.random_seed, stratify=y
@@ -160,13 +178,33 @@ class ReverseLogicTrainer:
             random_seed=self.random_seed,
         )
 
-        configs = {
-            "xgboost": {
-                **REVERSE_ANALYSIS_XGBOOST_CONFIG,
-                "feature_weight_overrides": REVERSE_ANALYSIS_XGBOOST_FEATURE_WEIGHTS,
-            },
-            "random_forest": REVERSE_ANALYSIS_RANDOM_FOREST_CONFIG,
-        }
+        # Seleccionar configuraciones según el target
+        if target == REVERSE_ANALYSIS_TARGET_SMOKING:
+            configs = {
+                "xgboost": {
+                    **REVERSE_ANALYSIS_SMOKING_XGBOOST_CONFIG,
+                    "feature_weight_overrides": REVERSE_ANALYSIS_FEATURE_WEIGHTS,
+                },
+                "random_forest": {
+                    **REVERSE_ANALYSIS_SMOKING_RANDOM_FOREST_CONFIG
+                },
+                "lightgbm": {
+                    **REVERSE_ANALYSIS_SMOKING_LIGHTGBM_CONFIG
+                }
+            }
+        else:  # REVERSE_ANALYSIS_TARGET_ALCOHOL
+            configs = {
+                "xgboost": {
+                    **REVERSE_ANALYSIS_ALCOHOL_XGBOOST_CONFIG,
+                    "feature_weight_overrides": REVERSE_ANALYSIS_FEATURE_WEIGHTS,
+                },
+                "random_forest": {
+                    **REVERSE_ANALYSIS_ALCOHOL_RANDOM_FOREST_CONFIG
+                },
+                "lightgbm": {
+                    **REVERSE_ANALYSIS_ALCOHOL_LIGHTGBM_CONFIG
+                }
+            }
 
         for model_type in model_types:
             config = configs.get(model_type, {})
