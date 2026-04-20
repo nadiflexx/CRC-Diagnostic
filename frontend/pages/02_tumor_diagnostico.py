@@ -317,9 +317,9 @@ def render() -> None:
 
         # ── Reference note ───────────────────────────────────────────────────
         st.caption(
-            "Modelo XGBoost entrenado sobre dataset sintético CRC (n=334.994) · "
-            "AUC-ROC 0.877 · Recall ≥ 0.90 · "
-            "Referencias: NCCN 2023, ESGAR 2022, Duffy et al. 2021"
+            "Modelo XGBoost + Temperature Scaling entrenado sobre dataset sintético CRC · "
+            "Estadificación T1–T4 (NCCN 2023 · ESGAR 2022 · Duffy et al. 2021) · "
+            "Recall ≥ 0.80 garantizado sobre set de calibración"
         )
 
 

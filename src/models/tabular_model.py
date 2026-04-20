@@ -8,7 +8,6 @@ from typing import Any
 import joblib
 import numpy as np
 import optuna
-from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import (
     classification_report,
     confusion_matrix,
@@ -21,6 +20,7 @@ from sklearn.model_selection import StratifiedKFold, cross_val_score
 import xgboost as xgb
 
 from src.config.logger import log as logger
+from src.models.calibration import TemperatureScaledModel, find_temperature
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -29,9 +29,15 @@ class TabularCancerModel:
     """
     XGBoost tabular classifier optimised for high recall in CRC screening.
 
-    Uses Optuna Bayesian hyperparameter search and calibrates the decision
-    threshold to guarantee a configurable minimum recall (default 0.90),
-    reflecting the clinical priority of minimising false negatives.
+    Uses Optuna Bayesian hyperparameter search and Temperature Scaling
+    calibration (Guo et al., ICML 2017) to produce well-calibrated
+    probabilities while guaranteeing a configurable minimum recall
+    (default 0.90), reflecting the clinical priority of minimising false
+    negatives.
+
+    The decision threshold is searched on calibrated probabilities so
+    that the inference-time threshold operates on the same probability
+    space as the clinical display.
     """
 
     def __init__(self, model_type: str = "xgboost"):
@@ -43,9 +49,14 @@ class TabularCancerModel:
                 ``"xgboost"`` is supported. Default is ``"xgboost"``.
         """
         self.model_type = model_type
+        # Public alias kept for SHAP / cross_validate compatibility.
         self.model: Any = None
         self.feature_names: list[str] | None = None
-        self.best_threshold = 0.5
+        self.best_threshold: float = 0.5
+        # Initialised to None so load() and predict_proba() are safe
+        # even if called before train().
+        self._base_model: Any = None
+        self._calibrator: TemperatureScaledModel | None = None
 
     # ──────────────────────────────────────────────────────────
     #  Hyperparameter search
@@ -76,6 +87,7 @@ class TabularCancerModel:
             "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),
             "scale_pos_weight": scale_pos,
             "eval_metric": "auc",
+            "use_label_encoder": False,
             "random_state": 42,
             "n_jobs": -1,
         }
@@ -118,23 +130,27 @@ class TabularCancerModel:
     #  Threshold calibration
     # ──────────────────────────────────────────────────────────
 
-    def _find_optimal_threshold(self, X_val, y_val, recall_target=0.90):
+    def _find_optimal_threshold(
+        self, X_val, y_val, recall_target: float = 0.90
+    ) -> float:
         """
         Find the highest threshold that guarantees recall >= recall_target.
 
-        Calibration is performed on the training set to avoid leakage.
-        In oncological screening a false negative implies a potentially
-        serious diagnostic delay, hence the priority on recall.
+        Uses **calibrated** probabilities (via ``predict_proba``) so that
+        the threshold operates on the same probability space seen at
+        inference time. In oncological screening a false negative implies
+        a potentially serious diagnostic delay, hence the priority on
+        recall.
 
         Args:
-            X: Training feature matrix.
-            y: Training labels.
+            X_val: Validation feature matrix.
+            y_val: Validation labels.
             recall_target (float): Minimum recall required. Default 0.90.
 
         Returns:
             float: Optimal decision threshold rounded to two decimals.
         """
-        probs = self.model.predict_proba(X_val)[:, 1]
+        probs = self.predict_proba(X_val)
 
         best_threshold = 0.50
         best_f1 = 0.0
@@ -164,7 +180,33 @@ class TabularCancerModel:
         class_weights=None,
         n_trials: int = 30,
         recall_target: float = 0.90,
+        t_minimum: float = 1.5,
     ):
+        """
+        Train the XGBoost model with Optuna search and Temperature Scaling
+        calibration.
+
+        Steps:
+            1. Optuna Bayesian search for best hyperparameters.
+            2. Fit final XGBoost model on ``X_train``.
+            3. Fit Temperature Scaling calibrator on ``X_val`` (or
+               ``X_train`` as fallback).
+            4. Calibrate decision threshold on calibrated probabilities.
+
+        Args:
+            X_train: Training feature matrix.
+            y_train: Training labels.
+            X_val: Optional validation feature matrix for calibration
+                and threshold search.
+            y_val: Optional validation labels.
+            feature_names: Ordered list of feature names.
+            class_weights: Unused — kept for API compatibility.
+            n_trials (int): Number of Optuna trials. Default 30.
+            recall_target (float): Minimum recall for threshold search.
+                Default 0.90.
+            t_minimum (float): Minimum temperature for Temperature
+                Scaling. Default 1.5.
+        """
         self.feature_names = feature_names
         logger.info(f"Training {self.model_type} — {len(X_train)} samples")
 
@@ -176,36 +218,35 @@ class TabularCancerModel:
             **best_params,
             "scale_pos_weight": scale_pos,
             "eval_metric": "auc",
+            "use_label_encoder": False,
             "random_state": 42,
             "n_jobs": -1,
         }
 
-        # 1. Entrenar modelo base
+        # 1. Fit base XGBoost model
         base_model = xgb.XGBClassifier(**final_params)
         base_model.fit(X_train, y_train)
         logger.info("Final model fitted.")
 
-        # Obtener probabilidades raw del modelo base sobre val set
+        # 2. Choose calibration set — prefer held-out val to avoid leakage
         if X_val is not None and y_val is not None:
-            cal_X = X_val
-            cal_y = y_val
+            cal_X, cal_y = X_val, y_val
         else:
-            cal_X = X_train
-            cal_y = y_train
+            cal_X, cal_y = X_train, y_train
 
-        raw_probs = base_model.predict_proba(cal_X)[:, 1]
-
-        # Ajustar isotonic regression: mapea raw_probs → calibrated_probs
-        self._calibrator = IsotonicRegression(out_of_bounds="clip")
-        self._calibrator.fit(raw_probs, cal_y)
+        # 3. Fit Temperature Scaling calibrator
+        logger.info("Fitting Temperature Scaling calibrator...")
+        temperature = find_temperature(base_model, cal_X, cal_y, t_minimum)
+        self._calibrator = TemperatureScaledModel(base_model, temperature)
         self._base_model = base_model
+        self.model = base_model  # kept for SHAP / cross_validate compatibility
 
-        # Wrapper para mantener la API predict_proba
-        self.model = base_model  # guardamos base para compatibilidad
+        logger.info(
+            f"Temperature Scaling fitted (T={temperature:.4f}, "
+            f"T>1 softens distribution)."
+        )
 
-        logger.info("Probability calibration fitted (isotonic).")
-
-        # 3. Calibrar threshold sobre val set
+        # 4. Calibrate threshold using calibrated probabilities
         self.best_threshold = self._find_optimal_threshold(cal_X, cal_y, recall_target)
         logger.info(f"Best threshold: {self.best_threshold:.2f}")
         logger.info("✅ Tabular model trained")
@@ -214,16 +255,19 @@ class TabularCancerModel:
         """
         Return calibrated probability of the positive class.
 
+        Probabilities are clipped to [PROB_MIN, PROB_MAX] = [0.05, 0.95]
+        inside ``TemperatureScaledModel`` to prevent clinically
+        implausible certainty claims.
+
         Args:
             X: Feature matrix of shape (n_samples, n_features).
 
         Returns:
-            np.ndarray of shape (n_samples,): P(cancer) calibrada.
+            np.ndarray of shape (n_samples,): Calibrated P(cancer).
         """
-        raw = self._base_model.predict_proba(X)[:, 1]
-        if hasattr(self, "_calibrator") and self._calibrator is not None:
-            return self._calibrator.predict(raw)
-        return raw
+        if self._calibrator is not None:
+            return self._calibrator.predict_proba(X)[:, 1]
+        return self._base_model.predict_proba(X)[:, 1]
 
     def predict(self, X) -> np.ndarray:
         """
@@ -269,8 +313,9 @@ class TabularCancerModel:
         """
         Stratified k-fold cross-validation on ROC-AUC.
 
-        Usa el modelo base (XGBoost) directamente para CV,
-        ya que el calibrador manual no implementa la API de sklearn estimator.
+        Uses the base XGBoost model directly because ``TemperatureScaledModel``
+        does not implement the sklearn estimator API required by
+        ``cross_val_score``.
 
         Args:
             X: Full feature matrix.
@@ -278,10 +323,10 @@ class TabularCancerModel:
             cv (int): Number of folds. Default 5.
 
         Returns:
-            dict: Keys mean_auc, std_auc, scores.
+            dict: Keys ``mean_auc``, ``std_auc``, ``scores``.
         """
         scores = cross_val_score(
-            self._base_model,  # ← modelo base, no el wrapper
+            self._base_model,
             X,
             y,
             cv=StratifiedKFold(cv, shuffle=True, random_state=42),
@@ -320,7 +365,7 @@ class TabularCancerModel:
         Deserialise a previously saved TabularCancerModel.
 
         Args:
-            path (Path): Path to the joblib file produced by save.
+            path (Path): Path to the joblib file produced by ``save``.
 
         Returns:
             TabularCancerModel: Fully restored model instance.

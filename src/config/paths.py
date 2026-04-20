@@ -30,7 +30,7 @@ class PathSettings(BaseSettings):
 
     @property
     def RAW_TABULAR(self) -> Path:
-        return self.RAW / "tabular"
+        return self.RAW / "tabular_risk"
 
     @property
     def PROCESSED(self) -> Path:

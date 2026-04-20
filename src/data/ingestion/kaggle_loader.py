@@ -173,7 +173,7 @@ class KaggleLoader:
             FileNotFoundError: If no CSV files are found in the expected
                 directory.
         """
-        data_dir = paths.RAW / "tabular_risk"
+        data_dir = paths.RAW_TABULAR
         csv_files = list(data_dir.glob("*.csv"))
         if not csv_files:
             raise FileNotFoundError(f"No CSVs in {data_dir}")

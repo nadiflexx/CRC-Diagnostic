@@ -5,6 +5,8 @@ Single source of truth for all magic values scattered across the codebase.
 
 from collections import OrderedDict
 
+import numpy as np
+
 from src.config.paths import paths
 
 # ═══════════════════════════════════════════════════════════
@@ -691,3 +693,72 @@ def detect_source_from_stem(stem: str) -> str:
         if stem.startswith(prefix):
             return source
     return "unknown"
+
+
+CANCER_MEANS = np.array([np.log(7.0), 11.40, 1240.0, 6.10, 33.0])
+CANCER_STDS = np.array([1.55, 2.80, 360.0, 2.10, 20.0])
+CANCER_CORR = np.array(
+    [
+        [1.00, -0.30, -0.22, 0.32, 0.25],
+        [-0.30, 1.00, 0.28, -0.25, -0.18],
+        [-0.22, 0.28, 1.00, -0.38, -0.30],
+        [0.32, -0.25, -0.38, 1.00, 0.48],
+        [0.25, -0.18, -0.30, 0.48, 1.00],
+    ]
+)
+
+HEALTHY_MEANS = np.array([np.log(2.10), 13.50, 1540.0, 4.80, 21.0])
+HEALTHY_STDS = np.array([0.85, 2.10, 260.0, 1.35, 9.5])
+
+HEALTHY_CORR = np.array(
+    [
+        [1.00, -0.08, -0.06, 0.12, 0.09],
+        [-0.08, 1.00, 0.16, -0.07, -0.05],
+        [-0.06, 0.16, 1.00, -0.22, -0.16],
+        [0.12, -0.07, -0.22, 1.00, 0.32],
+        [0.09, -0.05, -0.16, 0.32, 1.00],
+    ]
+)
+
+
+# Calibrated against: Gollub 2018, Lambregts 2013, Horvat 2019, NCCN 2023.
+STAGE_PARAMS = {
+    # T1 — confined to mucosa/submucosa. Clinically almost indistinguishable
+    # from benign tissue by serum biomarkers: CEA normal or marginally
+    # elevated, ADC mildly restricted only in lesions >1 cm. Intentional
+    # overlap with healthy forces probabilities 30-60%.
+    1: (
+        [np.log(1.9), 13.4, 1430.0, 4.92, 22.0],
+        [0.72, 2.00, 280.0, 1.35, 10.0],
+        0.67,
+        0.72,
+        0.14,
+    ),
+    # T2 — invades muscularis propria: moderate signal; still considerable
+    # overlap with inflamed healthy tissue and high individual variability.
+    2: (
+        [np.log(5.0), 12.2, 1120.0, 5.70, 28.0],
+        [0.88, 2.00, 280.0, 1.45, 12.0],
+        0.50,
+        0.67,
+        0.48,
+    ),
+    # T3 — penetrates subserosa: elevated CEA, clearly restricted ADC,
+    # anaemia.
+    3: (
+        [np.log(18.0), 10.3, 840.0, 6.60, 41.0],
+        [1.00, 2.20, 280.0, 1.40, 14.0],
+        0.32,
+        0.56,
+        0.90,
+    ),
+    # T4/M1 — perforation or metastasis: very high CEA, very low ADC,
+    # necrotic tumour.
+    4: (
+        [np.log(90.0), 8.0, 650.0, 7.60, 56.0],
+        [1.20, 1.80, 230.0, 1.45, 17.0],
+        0.18,
+        0.43,
+        1.35,
+    ),
+}

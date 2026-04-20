@@ -34,26 +34,6 @@ class DBSettings(BaseSettings):
 
 
 # ══════════════════════════════════════════════════════════════════
-#  GDC API (Genomic Data Commons)
-# ══════════════════════════════════════════════════════════════════
-class GDCSettings(BaseSettings):
-    """GDC API configuration."""
-
-    GDC_BASE_URL: str = "https://api.gdc.cancer.gov"
-    GDC_TIMEOUT: int = 60
-    GDC_MAX_RETRIES: int = 5
-    GDC_RETRY_DELAY: int = 2
-    GDC_RATE_LIMIT_DELAY: float = 0.5
-    GDC_MAX_CASES: int = 1000
-
-    model_config = SettingsConfigDict(
-        env_file=_ROOT / ".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-
-# ══════════════════════════════════════════════════════════════════
 #  MODEL HYPERPARAMETERS
 # ══════════════════════════════════════════════════════════════════
 class ModelSettings(BaseSettings):
@@ -83,34 +63,6 @@ class ModelSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
-
-# ══════════════════════════════════════════════════════════════════
-#  CLINICAL THRESHOLDS
-# ══════════════════════════════════════════════════════════════════
-class ClinicalSettings(BaseSettings):
-    """Clinical thresholds for cancer markers."""
-
-    # CEA (Carcinoembryonic Antigen)
-    CEA_NORMAL_MAX: float = 3.0  # ng/mL
-    CEA_ELEVATED: float = 5.0  # ng/mL
-    CEA_HIGH: float = 10.0  # ng/mL
-
-    # CA 19-9
-    CA19_9_NORMAL_MAX: float = 37.0  # U/mL
-
-    # Blood markers
-    HEMOGLOBIN_LOW: float = 12.0  # g/dL (anemia threshold)
-    HEMOGLOBIN_CRITICAL: float = 8.0  # g/dL
-    ALBUMIN_LOW: float = 3.5  # g/dL
-    FERRITIN_LOW: float = 20.0  # ng/mL
-    CRP_ELEVATED: float = 1.0  # mg/dL
-
-    # Platelet count
-    PLATELET_LOW: float = 150.0  # x10³/μL
-    PLATELET_HIGH: float = 400.0  # x10³/μL
-
-    model_config = SettingsConfigDict(extra="ignore")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -166,44 +118,9 @@ class APISettings(BaseSettings):
 
 
 # ══════════════════════════════════════════════════════════════════
-#  PIPELINE SETTINGS
-# ══════════════════════════════════════════════════════════════════
-class PipelineSettings(BaseSettings):
-    """Data pipeline configuration."""
-
-    # Kaggle datasets
-    KAGGLE_DATASETS: dict = {
-        "tabular_risk": "ankushpanday1/colorectal-cancer-risk-and-survival-data",
-        "kvasir_seg": "ipythonx/kvasirseg",
-        "curated_colon": "francismon/curated-colon-dataset-for-deep-learning",
-        "cvc_clinicdb": "orvile/cvc-clinicdb",
-    }
-
-    # Data balancing
-    MIN_SAMPLES_PER_CLASS: int = 2000
-    BALANCE_STRATEGY: str = "smote"  # smote, adasyn, smote_tomek
-
-    # Train/Val/Test split
-    TEST_SIZE: float = 0.15
-    VAL_SIZE: float = 0.15
-
-    # Synthetic data
-    SYNTHETIC_HEALTHY_RATIO: float = 1.0  # 1:1 with cancer
-
-    model_config = SettingsConfigDict(
-        env_file=_ROOT / ".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-
-# ══════════════════════════════════════════════════════════════════
 #  SINGLETON INSTANCES
 # ══════════════════════════════════════════════════════════════════
 db = DBSettings()
-gdc = GDCSettings()
 model = ModelSettings()
-clinical = ClinicalSettings()
 diagnosis = DiagnosisSettings()
 api = APISettings()
-pipeline = PipelineSettings()

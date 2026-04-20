@@ -58,16 +58,21 @@ def train_tabular_pipeline():
 
     Steps:
         1. Generate the clinical + radiomic dataset via
-           ``ClinicalDataGenerator``.
+           ``ClinicalDataGenerator`` (T-stage stratified, wider stds).
         2. Preprocess features with ``TabularPreprocessor``.
         3. Run anti-leakage quality check on the full dataset.
-        4. Split into train / test sets (80 / 20, stratified).
-        5. Train an XGBoost model with Optuna hyperparameter search
-           and recall-targeted threshold calibration.
-        6. Evaluate the model on the held-out test set and
+        4. Split into train / calibration / test sets
+           (≈68% / 12% / 20%, stratified). The calibration set is
+           held out from XGBoost training and used exclusively for
+           Temperature Scaling and threshold search.
+        5. Train an XGBoost model with Optuna hyperparameter search.
+        6. Fit Temperature Scaling calibration on the calibration set.
+        7. Search the optimal recall-targeted threshold on calibrated
+           probabilities.
+        8. Evaluate the model on the held-out test set and
            cross-validate.
-        7. Generate SHAP explanations for two representative samples.
-        8. Save the trained model and preprocessor to disk.
+        9. Generate SHAP explanations for two representative samples.
+        10. Save the trained model and preprocessor to disk.
 
     Returns:
         tuple[TabularCancerModel, TabularPreprocessor, dict]:
@@ -91,35 +96,38 @@ def train_tabular_pipeline():
     logger.info("═══ Anti-Leakage Check ═══")
     validate_data_quality(X, y, feature_names)
 
-    # 4. Train / test split (80/20, stratified)
-    logger.info("═══ Train/Test Split ═══")
-    X_train, X_temp, y_train, y_temp = train_test_split(
-        X, y, test_size=0.30, stratify=y, random_state=42
+    # 4. Split — 80% train+cal / 20% test (stratified), then 15% of
+    #    train+cal reserved as calibration set → ≈68% train / 12% cal / 20% test.
+    #    The calibration set is NEVER seen by XGBoost during fit().
+    logger.info("═══ Train/Cal/Test Split ═══")
+    X_trainval, X_test, y_trainval, y_test = train_test_split(
+        X, y, test_size=0.20, stratify=y, random_state=42
     )
-    X_val, X_test, y_val, y_test = train_test_split(
-        X_temp, y_temp, test_size=0.50, stratify=y_temp, random_state=42
+    X_train, X_cal, y_train, y_cal = train_test_split(
+        X_trainval, y_trainval, test_size=0.15, stratify=y_trainval, random_state=42
     )
-    logger.info(f"Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
+    logger.info(f"Train: {len(X_train)} | Cal: {len(X_cal)} | Test: {len(X_test)}")
 
-    # 5. Train — pasar X_val e y_val explícitamente
+    # 5–7. Train (Optuna search + Temperature Scaling + threshold)
     logger.info("═══ Training ═══")
     model = TabularCancerModel(model_type="xgboost")
     model.train(
         X_train,
         y_train,
-        X_val=X_val,  # ← ahora se usan de verdad
-        y_val=y_val,  # ← ahora se usan de verdad
+        X_val=X_cal,  # calibration set for Temperature Scaling + threshold
+        y_val=y_cal,
         feature_names=feature_names,
         n_trials=30,
         recall_target=0.80,
+        t_minimum=1.5,
     )
 
-    # 6. Evaluate
+    # 8. Evaluate
     logger.info("═══ Evaluation ═══")
     results = model.evaluate(X_test, y_test)
     model.cross_validate(X, y)
 
-    # 7. Explainability
+    # 9. Explainability — use _base_model for TreeExplainer (raw XGBoost)
     logger.info("═══ Explainability ═══")
     explainer = TabularExplainer(model, feature_names)
     explainer.fit(X_train)
@@ -133,7 +141,7 @@ def train_tabular_pipeline():
         save_path=str(paths.MODELS / "shap_explanation.png"),
     )
 
-    # 8. Save
+    # 10. Save
     logger.info("═══ Saving ═══")
     paths.MODELS.mkdir(parents=True, exist_ok=True)
     model.save(paths.TABULAR_MODEL_PATH)

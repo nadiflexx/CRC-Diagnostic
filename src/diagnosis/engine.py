@@ -698,13 +698,18 @@ class DiagnosisEngine:
                 df[feat] = CLINICAL_DEFAULTS.get(feat, 0.0)
 
         X = self.tabular_preprocessor.transform(df)
-        prob = float(self.tabular_model.predict_proba(X)[0])
+
+        # predict_proba returns 1-D array of shape (n_samples,) — P(cancer)
+        # TemperatureScaledModel clips output to [PROB_MIN, PROB_MAX] = [0.05, 0.95]
+        prob_array = self.tabular_model.predict_proba(X)
+        prob = float(prob_array[0])
 
         high_risk = prob >= self.tabular_model.best_threshold
         factors = self._extract_risk_factors(patient_data)
 
         logger.info(
-            f"  [joblib tabular] prob={prob:.3f}, "
+            f"  [joblib tabular] prob={prob:.3f} "
+            f"(calibrated via TemperatureScaling), "
             f"threshold={self.tabular_model.best_threshold:.2f}, "
             f"high_risk={high_risk}"
         )

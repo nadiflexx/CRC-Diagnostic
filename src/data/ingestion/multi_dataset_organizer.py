@@ -14,7 +14,8 @@ import pandas as pd
 from PIL import Image
 from sklearn.model_selection import train_test_split
 from sqlalchemy import inspect as sa_inspect
-from src.data.processing.reverse_logic_processor import ReverseLogicDataAnalyzer
+
+# from src.data.processing.reverse_logic_processor import ReverseLogicDataAnalyzer
 from tqdm import tqdm
 
 from src.config.constants import (
@@ -135,15 +136,15 @@ class MultiDatasetOrganizer:
         """
         logger.info("\n═══ Phase 10: Tabular Data Processing ═══")
         input_path = paths.RAW_TABULAR / "colorectal_cancer_dataset.csv"
-        output_path = paths.PROCESSED_TABULAR / "colorectal_cancer_cleaned.csv"
-        input_path_alk_smk = paths.RAW_TABULAR / "smoking_drinking_dataset_Ver01.csv"
-        output_path_alk_smk = paths.PROCESSED_TABULAR / "smoking_drinking_cleaned.csv"
+        output_path = paths.TABULAR_PROCESSED / "colorectal_cancer_cleaned.csv"
+        # input_path_alk_smk = paths.RAW_TABULAR / "smoking_drinking_dataset_Ver01.csv"
+        # output_path_alk_smk = paths.PROCESSED_TABULAR / "smoking_drinking_cleaned.csv"
 
         try:
             df = self._load_colorectal_cancer_csv(input_path)
             df_clean = self._clean_colorectal_dataset(df)
-            df_alk_smk = self._load_dataset_smoking_drinking(input_path_alk_smk)
-            df_clean_alk_smk = self._clean_smoking_drinking_dataset(df_alk_smk)
+            # df_alk_smk = self._load_dataset_smoking_drinking(input_path_alk_smk)
+            # df_clean_alk_smk = self._clean_smoking_drinking_dataset(df_alk_smk)
 
             if df_clean is not None:
                 is_valid = self._validate_colorectal_data(df_clean)
@@ -156,7 +157,7 @@ class MultiDatasetOrganizer:
             else:
                 logger.error("  ❌ Cleaning process returned None.")
 
-            if df_clean_alk_smk is not None:
+            """   if df_clean_alk_smk is not None:
                 is_valid = self._validate_smoking_drinking_data(df_clean_alk_smk)
                 if is_valid:
                     self._save_cleaned_smoking_drinking_dataset(
@@ -167,7 +168,7 @@ class MultiDatasetOrganizer:
                         "  ❌ Tabular smoking/drinking dataset validation failed. File will not be saved."
                     )
             else:
-                logger.error("  ❌ Cleaning process returned None.")
+                logger.error("  ❌ Cleaning process returned None.") """
         except Exception as e:
             logger.error(f"  ❌ Error during tabular processing: {e}")
             import traceback
@@ -447,8 +448,8 @@ class MultiDatasetOrganizer:
         filepath.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(filepath, index=False)
         logger.info(f"  [SAVE] Cleaned dataset saved to: {filepath}")
-        analyzer = ReverseLogicDataAnalyzer()
-        analyzer.generate_dataset_report(df)
+        # analyzer = ReverseLogicDataAnalyzer()
+        # analyzer.generate_dataset_report(df)
 
     def _start_tissue_preprocessor(self):
         """
