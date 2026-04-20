@@ -241,9 +241,13 @@ class ReverseLogicTabularModel:
         preprocessor = ColumnTransformer(
             transformers=transformers,
             remainder="drop",
+            verbose_feature_names_out=False,  # Preserve original feature names
         )
 
-        model = lgb.LGBMClassifier(**config)
+        # Create a config copy to avoid modifying the original
+        config_copy = config.copy()
+        
+        model = lgb.LGBMClassifier(**config_copy)
 
         return Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
 

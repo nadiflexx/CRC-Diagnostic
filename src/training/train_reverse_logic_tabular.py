@@ -13,9 +13,17 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
+import warnings
+
+# Configure matplotlib backend BEFORE any other imports that use it
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for parallel processing
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
+
+# Suppress specific sklearn warnings about feature names
+warnings.filterwarnings('ignore', message='X does not have valid feature names')
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 

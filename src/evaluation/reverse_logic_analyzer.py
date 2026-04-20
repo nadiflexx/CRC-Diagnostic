@@ -6,12 +6,20 @@ Main focus: Confusion Matrices for detailed error analysis.
 
 from pathlib import Path
 from typing import Dict, List, Optional
+import warnings
 
+# Configure matplotlib backend before importing pyplot
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
+
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from src.config.paths import paths
+
+# Suppress feature name warnings
+warnings.filterwarnings('ignore', message='X does not have valid feature names')
 from sklearn.metrics import (
     confusion_matrix,
     roc_curve,

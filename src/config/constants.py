@@ -674,14 +674,12 @@ REVERSE_ANALYSIS_FEATURES = [
 REVERSE_ANALYSIS_SMOKE_FEATURES = [
     "sex", "age", "height", "BMI", "weight", "waistline", "triglyceride", 
     "HDL_chole", "LDL_chole", "hemoglobin",
-    # Engineered features
     "waist_height_ratio", "hemoglobin_per_height"
 ]
 
 REVERSE_ANALYSIS_DRINK_FEATURES = [
     "age", "BMI", "waistline", "triglyceride", "HDL_chole", "LDL_chole",
     "gamma_GTP", "SGOT_AST", "SGOT_ALT", "AST_ALT_ratio", "height",
-    # Engineered features
     "waist_height_ratio", "gamma_GTP_log", "liver_index", "age_sex_interaction", "bmi_category"
 ]
 
@@ -709,11 +707,11 @@ REVERSE_ANALYSIS_NUMERIC_FEATURES = [
     "age", "height", "weight", "waistline", "SBP", "DBP", "BLDS", "tot_chole", "HDL_chole",
     "LDL_chole", "triglyceride", "hemoglobin", "urine_protein", "serum_creatinine",
     "SGOT_AST", "SGOT_ALT", "gamma_GTP", "BMI", "AST_ALT_ratio",
-    # Engineered numeric features
-    "waist_height_ratio", "hemoglobin_per_height", "gamma_GTP_log", "liver_index", "age_sex_interaction"
+    "waist_height_ratio", "hemoglobin_per_height", "gamma_GTP_log", "liver_index", "age_sex_interaction",
+    "bmi_category"  # Ordinal feature (0-3), not categorical
 ]
  
-REVERSE_ANALYSIS_CATEGORICAL_FEATURES = ["sex", "bmi_category"]
+REVERSE_ANALYSIS_CATEGORICAL_FEATURES = ["sex"]  # Only sex is truly categorical
  
 # Training Configuration
 REVERSE_ANALYSIS_RANDOM_SEED = 42
@@ -796,8 +794,35 @@ REVERSE_ANALYSIS_ALCOHOL_LIGHTGBM_CONFIG = {
     "metric": "auc",
     "verbose": -1,
 }
- 
-REVERSE_ANALYSIS_FEATURE_WEIGHTS = {}
+
+# Feature Weights - Reduce impact of 'sex' on model predictions
+# Emphasize clinical biomarkers over demographic variables
+# Weights are relative importance scores (normalized 0-1)
+REVERSE_ANALYSIS_FEATURE_WEIGHTS = {
+    # SMOKING FEATURES - Emphasis on hemoglobin & metabolic indicators
+    "sex": 0.05,  # Very low weight - reduce demographic bias
+    "age": 0.10,  # Low weight - age has minimal effect on smoking detection
+    "height": 0.08,  # Low weight
+    "BMI": 0.15,  # Moderate weight
+    "weight": 0.12,  # Moderate weight
+    "waistline": 0.18,  # High weight - strong smoking indicator
+    "triglyceride": 0.15,  # High weight - metabolic marker
+    "HDL_chole": 0.12,  # Moderate weight
+    "LDL_chole": 0.10,  # Moderate weight
+    "hemoglobin": 0.20,  # VERY HIGH weight - dominant smoking indicator
+    "waist_height_ratio": 0.22,  # VERY HIGH weight - engineered metabolic indicator
+    "hemoglobin_per_height": 0.25,  # CRITICAL weight - strongest smoking predictor
+    
+    # ALCOHOL FEATURES
+    "gamma_GTP": 0.28,  # CRITICAL weight - dominant alcohol indicator (liver enzyme)
+    "SGOT_AST": 0.18,  # High weight - hepatic damage marker
+    "SGOT_ALT": 0.16,  # High weight - hepatic damage marker
+    "AST_ALT_ratio": 0.15,  # Moderate weight - derived hepatic ratio
+    "gamma_GTP_log": 0.26,  # VERY HIGH weight - log-transformed liver enzyme
+    "liver_index": 0.20,  # High weight - composite hepatic indicator
+    "age_sex_interaction": 0.08,  # Low weight - age-sex effect is weak
+    "bmi_category": 0.10,  # Low weight - categorical BMI discretization
+}
 
 # ─ Optuna Hyperparameter Optimization
 REVERSE_ANALYSIS_USE_OPTUNA = False  # Set to True to enable Optuna tuning
