@@ -13,7 +13,7 @@ router = APIRouter(prefix="/diagnosis", tags=["Diagnosis"])
 
 
 @router.post("/run", response_model=DiagnosisResponse)
-def run_diagnosis(req: DiagnosisRequest, db: Session = Depends(get_db_dependency)):  # type: ignore
+def run_diagnosis(req: DiagnosisRequest, db: Session = Depends(get_db_dependency)):  # noqa: B008
     """Run a diagnosis for the given patient."""
     if db is None:
         db = Depends(get_db_dependency)
@@ -163,7 +163,7 @@ def run_diagnosis(req: DiagnosisRequest, db: Session = Depends(get_db_dependency
 
 
 @router.get("/history/{patient_id}")
-def get_history(patient_id: int, db: Session = Depends(get_db_dependency)):
+def get_history(patient_id: int, db: Session = Depends(get_db_dependency)):  # noqa: B008
     visits = VisitRepository(db).get_patient_visits(patient_id)
     return [
         {
