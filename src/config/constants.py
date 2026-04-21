@@ -91,6 +91,7 @@ KAGGLE_DATASETS = {
     "tabular_risk": "ankushpanday2/colorectal-cancer-global-dataset-and-predictions",
     "curated_colon": "francismon/curated-colon-dataset-for-deep-learning",
     "cvc_clinicdb": "balraj98/cvcclinicdb",
+    "tabular_smoke": "sooyoungher/smoking-drinking-dataset",
 }
 
 # ═══════════════════════════════════════════════════════════
@@ -106,8 +107,47 @@ IMAGE_GLOB_PATTERNS = [f"*{ext}" for ext in IMAGE_EXTENSIONS]
 UPLOAD_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
 
 # ═══════════════════════════════════════════════════════════
-#  TABULAR FEATURES  (Clinical + Radiomic — CRC synthetic dataset)
+#  TABULAR FEATURES
 # ═══════════════════════════════════════════════════════════
+
+NUMERIC_FEATURES = [
+    "age",
+    "bmi",
+    "hemoglobin",
+    "hematocrit",
+    "wbc_count",
+    "platelet_count",
+    "albumin",
+    "iron_serum",
+    "ferritin",
+    "crp",
+    "cea",
+    "ca19_9",
+    "pack_years_smoked",
+    "previous_polyps_count",
+]
+
+CATEGORICAL_FEATURES = [
+    "gender",
+    "ethnicity",
+    "smoking_status",
+    "alcohol_consumption",
+    "physical_activity",
+    "diet_type",
+]
+
+BINARY_FEATURES = [
+    "family_history_ccr",
+    "family_history_polyps",
+    "family_history_lynch",
+    "family_history_fap",
+    "has_ibd",
+    "has_diabetes_t2",
+    "previous_polyps",
+    "previous_cancer",
+    "fobt_positive",
+    "fit_positive",
+]
 
 CLINICAL_NUMERIC_FEATURES = [
     "Age",
@@ -125,37 +165,93 @@ CLINICAL_NUMERIC_FEATURES = [
 
 TABULAR_TARGET = "Diagnosis"
 
+# Default values for missing clinical data (used in diagnosis engine)
+CLINICAL_DEFAULTS = {
+    "pack_years_smoked": 0.0,
+    "albumin": 4.5,
+    "hematocrit": 45.0,
+    "iron_serum": 100.0,
+    "wbc_count": 7.0,
+    "platelet_count": 250.0,
+    "ferritin": 100.0,
+    "crp": 1.0,
+    "cea": 1.5,
+    "ca19_9": 10.0,
+    "previous_polyps_count": 0,
+}
+
 # ═══════════════════════════════════════════════════════════
 #  PHYSIOLOGICAL CLIP RANGES
 # ═══════════════════════════════════════════════════════════
 
 PHYSIOLOGICAL_RANGES = {
-    "CEA_Level_ng_mL": (0.10, 5000.0),
-    "Hemoglobin_g_dL": (5.00, 20.0),
-    "PyRad_ADC_Mean": (200.0, 2500.0),
-    "PyRad_ADC_Std": (5.0, 400.0),
-    "PyRad_Entropy": (0.1, 10.0),
-    "PyRad_GLCM_Contrast": (0.1, 200.0),
-    "PyRad_GLCM_Homogeneity": (0.01, 1.0),
-    "PyRad_Shape_Sphericity": (0.25, 1.0),
-    "Age": (18.0, 100.0),
-    "Smoking_History": (0.0, 1.0),
+    "hemoglobin": (5, 19),
+    "hematocrit": (15, 58),
+    "iron_serum": (5, 200),
+    "ferritin": (1, 350),
+    "wbc_count": (2, 25),
+    "platelet_count": (100, 700),
+    "albumin": (1.5, 5.8),
+    "bmi": (14, 55),
+    "crp": (0.01, 25),
+    "cea": (0.05, 250),
+    "ca19_9": (0.1, 600),
+    "age": (18, 100),
+    "pack_years_smoked": (0, 80),
+    "previous_polyps_count": (0, 20),
 }
 
-# Default values for missing clinical data (used in diagnosis engine)
-CLINICAL_DEFAULTS = {
-    "Age": 50.0,
-    "Smoking_History": 0.0,
-    "CEA_Level_ng_mL": 2.1,
-    "Hemoglobin_g_dL": 13.5,
-    "PyRad_ADC_Mean": 1540.0,
-    "PyRad_ADC_Std": 80.0,
-    "PyRad_Entropy": 4.8,
-    "PyRad_GLCM_Contrast": 21.0,
-    "PyRad_GLCM_Homogeneity": 0.72,
-    "PyRad_Shape_Sphericity": 0.73,
-    "PyRad_FirstOrder_Skewness": 0.05,
+# ═══════════════════════════════════════════════════════════
+#  GDC API MAPPINGS
+# ═══════════════════════════════════════════════════════════
+
+GDC_TOBACCO_MAP = {
+    "current smoker": "current",
+    "current reformed smoker for > 15 years": "former",
+    "current reformed smoker for < or = 15 years": "former",
+    "lifelong non-smoker": "never",
+    "not reported": "unknown",
 }
+
+GDC_ALCOHOL_MAP = {
+    "yes": "moderate",
+    "no": "none",
+    "not reported": "unknown",
+}
+
+# ═══════════════════════════════════════════════════════════
+#  KAGGLE RISK DATA MAPPINGS
+# ═══════════════════════════════════════════════════════════
+
+KAGGLE_RACE_MAP = {
+    "White": "white",
+    "Black": "black",
+    "Asian": "asian",
+    "Hispanic": "hispanic",
+    "Other": "other",
+}
+
+KAGGLE_SMOKING_MAP = {"Current": "current", "Former": "former", "Never": "never"}
+
+KAGGLE_ALCOHOL_MAP = {
+    "High": "heavy",
+    "Moderate": "moderate",
+    "Low": "moderate",
+    "None": "none",
+}
+
+KAGGLE_ACTIVITY_MAP = {"High": "active", "Moderate": "moderate", "Low": "sedentary"}
+
+KAGGLE_DIET_MAP = {
+    "Western": "high_fat_low_fiber",
+    "Mediterranean": "high_fiber",
+    "Balanced": "balanced",
+    "Vegetarian": "high_fiber",
+    "High-Fiber": "high_fiber",
+    "Low-Fiber": "high_fat_low_fiber",
+}
+
+KAGGLE_STAGE_MAP = {"I": 1, "II": 2, "III": 3, "IV": 4}
 
 # ═══════════════════════════════════════════════════════════
 #  CURATED COLON FOLDER KEYWORDS
@@ -243,7 +339,7 @@ DATASET_CONFIG = {
     },
     "limuc": {
         "base_path": paths.DATA / "raw" / "limuc",
-        "search_dirs": [],
+        "search_dirs": [],  # Estructura especial: paciente/mayo_score/
         "description": "LIMUC: Colitis Ulcerosa por Mayo score",
         "color": "#2ecc71",
         "subcarpetas_interes": {
@@ -259,6 +355,15 @@ DATASET_CONFIG = {
         "subcarpetas_interes": {},
     },
 }
+
+
+def detect_source_from_stem(stem: str) -> str:
+    """Detects dataset source from filename prefix."""
+    for prefix, source in SOURCE_PREFIXES.items():
+        if stem.startswith(prefix):
+            return source
+    return "unknown"
+
 
 # ═══════════════════════════════════════════════════════════
 #  TABULAR COLON ANALYSIS — Análisis de riesgo por demografía
@@ -579,6 +684,7 @@ TABULAR_ANALYSIS_IMAGE_CONFIG = {
 # FEATURES (Independent Variables - Clinical & Demographic Indicators)
 REVERSE_ANALYSIS_FEATURES = [
     "sex",
+    "age",
     "height",
     "weight",
     "waistline",
@@ -598,6 +704,52 @@ REVERSE_ANALYSIS_FEATURES = [
     "BMI",
     "AST_ALT_ratio",
 ]
+
+REVERSE_ANALYSIS_SMOKE_FEATURES = [
+    "sex",
+    "age",
+    "height",
+    "BMI",
+    "weight",
+    "waistline",
+    "triglyceride",
+    "HDL_chole",
+    "LDL_chole",
+    "hemoglobin",
+    "waist_height_ratio",
+    "hemoglobin_per_height",
+]
+
+REVERSE_ANALYSIS_DRINK_FEATURES = [
+    "age",
+    "BMI",
+    "waistline",
+    "triglyceride",
+    "HDL_chole",
+    "LDL_chole",
+    "gamma_GTP",
+    "SGOT_AST",
+    "SGOT_ALT",
+    "AST_ALT_ratio",
+    "height",
+    "waist_height_ratio",
+    "gamma_GTP_log",
+    "liver_index",
+    "age_sex_interaction",
+    "bmi_category",
+]
+
+# Engineered Features (calculated from raw features)
+REVERSE_ANALYSIS_ENGINEERED_FEATURES = [
+    "waist_height_ratio",
+    "hemoglobin_per_height",
+    "gamma_GTP_log",
+    "liver_index",
+    "age_sex_interaction",
+    "bmi_category",
+]
+
+REVERSE_DROP_FEATURES = ["sight_left", "sight_right", "hear_left", "hear_right"]
 
 # Biomarcadores específicos a analizar
 REVERSE_ANALYSIS_BIOMARKERS = ["SGOT_AST", "SGOT_ALT", "gamma_GTP", "AST_ALT_ratio"]
@@ -608,6 +760,7 @@ REVERSE_ANALYSIS_TARGET_ALCOHOL = "DRK_YN"
 
 # Feature Type Specifications
 REVERSE_ANALYSIS_NUMERIC_FEATURES = [
+    "age",
     "height",
     "weight",
     "waistline",
@@ -626,9 +779,15 @@ REVERSE_ANALYSIS_NUMERIC_FEATURES = [
     "gamma_GTP",
     "BMI",
     "AST_ALT_ratio",
+    "waist_height_ratio",
+    "hemoglobin_per_height",
+    "gamma_GTP_log",
+    "liver_index",
+    "age_sex_interaction",
+    "bmi_category",  # Ordinal feature (0-3), not categorical
 ]
 
-REVERSE_ANALYSIS_CATEGORICAL_FEATURES = ["sex"]
+REVERSE_ANALYSIS_CATEGORICAL_FEATURES = ["sex"]  # Only sex is truly categorical
 
 # Training Configuration
 REVERSE_ANALYSIS_RANDOM_SEED = 42
@@ -637,31 +796,116 @@ REVERSE_ANALYSIS_VAL_SIZE = 0.15
 REVERSE_ANALYSIS_CV_FOLDS = 5
 
 # Model Configurations XGBoost y Random Forest
-REVERSE_ANALYSIS_XGBOOST_CONFIG = {
-    "n_estimators": 200,
-    "max_depth": 5,
-    "learning_rate": 0.08,
-    "subsample": 0.85,
+# ─ Smoking History
+# SMOKING (SMK_stat_type_cd) → imbalanced (60/40)
+# Basado en: Davagdorj 2020 + Oh 2026 (cáncer gástrico NHIS) + Hwang 2024
+REVERSE_ANALYSIS_SMOKING_XGBOOST_CONFIG = {
+    "n_estimators": 500,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
     "colsample_bytree": 0.85,
+    "reg_alpha": 0.1,
+    "reg_lambda": 1.0,
     "objective": "binary:logistic",
-    "eval_metric": "logloss",
+    "eval_metric": "aucpr",
+    "scale_pos_weight": 602431 / 388889,
 }
 
-REVERSE_ANALYSIS_XGBOOST_FEATURE_WEIGHTS = {
-    "sex": 0.1,
+REVERSE_ANALYSIS_SMOKING_RANDOM_FOREST_CONFIG = {
+    "n_estimators": 400,
+    "max_depth": 10,
+    "class_weight": {0: 1.0, 1: 1.55},
+    "random_state": REVERSE_ANALYSIS_RANDOM_SEED,
+    "n_jobs": -1,
+    "min_samples_leaf": 5,  # evita overfitting
 }
 
-REVERSE_ANALYSIS_RANDOM_FOREST_CONFIG = {
-    "n_estimators": 200,
+# ─ Alcohol Consumption
+# ALCOHOL (DRK_YN) → casi balanceado + gamma_GTP dominante
+# Basado en: Dalal 2022 (enfermedad hepática) + Lee 2025 (diabetes NHIS)
+REVERSE_ANALYSIS_ALCOHOL_XGBOOST_CONFIG = {
+    "n_estimators": 500,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.85,
+    "reg_alpha": 0.5,
+    "reg_lambda": 1.5,
+    "objective": "binary:logistic",
+    "eval_metric": "aucpr",
+}
+
+REVERSE_ANALYSIS_ALCOHOL_RANDOM_FOREST_CONFIG = {
+    "n_estimators": 400,
     "max_depth": 10,
     "class_weight": "balanced",
     "random_state": REVERSE_ANALYSIS_RANDOM_SEED,
-    "n_jobs": 1,
+    "n_jobs": -1,
+    "min_samples_leaf": 5,
 }
+
+# ─ LightGBM (para Stacking)
+REVERSE_ANALYSIS_SMOKING_LIGHTGBM_CONFIG = {
+    "n_estimators": 300,
+    "max_depth": 7,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "num_leaves": 31,
+    "objective": "binary",
+    "metric": "auc",
+    "scale_pos_weight": 602431 / 388889,
+    "verbose": -1,
+}
+
+REVERSE_ANALYSIS_ALCOHOL_LIGHTGBM_CONFIG = {
+    "n_estimators": 300,
+    "max_depth": 7,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "num_leaves": 31,
+    "objective": "binary",
+    "metric": "auc",
+    "verbose": -1,
+}
+
+# Feature Weights - Reduce impact of 'sex' on model predictions
+# Emphasize clinical biomarkers over demographic variables
+# Weights are relative importance scores (normalized 0-1)
+REVERSE_ANALYSIS_FEATURE_WEIGHTS = {
+    # SMOKING FEATURES - Emphasis on hemoglobin & metabolic indicators
+    "sex": 0.05,  # Very low weight - reduce demographic bias
+    "age": 0.10,  # Low weight - age has minimal effect on smoking detection
+    "height": 0.08,  # Low weight
+    "BMI": 0.15,  # Moderate weight
+    "weight": 0.12,  # Moderate weight
+    "waistline": 0.18,  # High weight - strong smoking indicator
+    "triglyceride": 0.15,  # High weight - metabolic marker
+    "HDL_chole": 0.12,  # Moderate weight
+    "LDL_chole": 0.10,  # Moderate weight
+    "hemoglobin": 0.20,  # VERY HIGH weight - dominant smoking indicator
+    "waist_height_ratio": 0.22,  # VERY HIGH weight - engineered metabolic indicator
+    "hemoglobin_per_height": 0.25,  # CRITICAL weight - strongest smoking predictor
+    # ALCOHOL FEATURES
+    "gamma_GTP": 0.28,  # CRITICAL weight - dominant alcohol indicator (liver enzyme)
+    "SGOT_AST": 0.18,  # High weight - hepatic damage marker
+    "SGOT_ALT": 0.16,  # High weight - hepatic damage marker
+    "AST_ALT_ratio": 0.15,  # Moderate weight - derived hepatic ratio
+    "gamma_GTP_log": 0.26,  # VERY HIGH weight - log-transformed liver enzyme
+    "liver_index": 0.20,  # High weight - composite hepatic indicator
+    "age_sex_interaction": 0.08,  # Low weight - age-sex effect is weak
+    "bmi_category": 0.10,  # Low weight - categorical BMI discretization
+}
+
+# ─ Optuna Hyperparameter Optimization
+REVERSE_ANALYSIS_USE_OPTUNA = False  # Set to True to enable Optuna tuning
+REVERSE_ANALYSIS_OPTUNA_TRIALS = 100  # Number of Optuna trials
+REVERSE_ANALYSIS_OPTUNA_TIMEOUT = 3600  # Timeout in seconds (1 hour)
 
 # Default Profile for Frontend Screening
 REVERSE_ANALYSIS_DEFAULT_PROFILE = {
-    "sex": "Male",
     "height": 175,
     "weight": 75,
     "waistline": 85.0,
@@ -682,18 +926,21 @@ REVERSE_ANALYSIS_DEFAULT_PROFILE = {
     "AST_ALT_ratio": 1.0,
 }
 
-REVERSE_ANALYSIS_MODELS = ["xgboost", "random_forest"]
-REVERSE_ANALYSIS_MODEL_NAMES = {"xgboost": "XGBoost", "random_forest": "Random Forest"}
-REVERSE_ANALYSIS_COLORS = {"xgboost": "#1f77b4", "random_forest": "#2ca02c"}
+REVERSE_ANALYSIS_MODELS = ["xgboost", "random_forest", "lightgbm"]
+REVERSE_ANALYSIS_MODEL_NAMES = {
+    "xgboost": "XGBoost",
+    "random_forest": "Random Forest",
+    "lightgbm": "LightGBM",
+}
+REVERSE_ANALYSIS_COLORS = {
+    "xgboost": "#1f77b4",
+    "random_forest": "#2ca02c",
+    "lightgbm": "#ff7f0e",
+}
 
-
-def detect_source_from_stem(stem: str) -> str:
-    """Detects dataset source from filename prefix."""
-    for prefix, source in SOURCE_PREFIXES.items():
-        if stem.startswith(prefix):
-            return source
-    return "unknown"
-
+# ─ Stacking Configuration
+REVERSE_ANALYSIS_USE_STACKING = True  # Enable XGBoost + LightGBM stacking
+REVERSE_ANALYSIS_STACKING_MODELS = ["xgboost", "lightgbm"]  # Models to stack
 
 CANCER_MEANS = np.array([np.log(7.0), 11.40, 1240.0, 6.10, 33.0])
 CANCER_STDS = np.array([1.55, 2.80, 360.0, 2.10, 20.0])
@@ -762,3 +1009,77 @@ STAGE_PARAMS = {
         1.35,
     ),
 }
+
+CATEGORICAL_ENCODINGS: dict[str, dict[str, int]] = {
+    "gender": {
+        "male": 0,
+        "m": 0,
+        "masculino": 0,
+        "female": 1,
+        "f": 1,
+        "femenino": 1,
+    },
+    "smoking_status": {
+        "never": 0,
+        "nunca": 0,
+        "former": 1,
+        "exfumador": 1,
+        "current": 2,
+        "fumador": 2,
+    },
+    "alcohol_consumption": {
+        "none": 0,
+        "ninguno": 0,
+        "moderate": 1,
+        "moderado": 1,
+        "heavy": 2,
+        "alto": 2,
+    },
+    "physical_activity": {
+        "sedentary": 0,
+        "sedentario": 0,
+        "low": 1,
+        "bajo": 1,
+        "moderate": 2,
+        "moderado": 2,
+        "high": 3,
+        "alto": 3,
+    },
+    "diet_type": {
+        "western": 0,
+        "occidental": 0,
+        "mediterranean": 1,
+        "mediterranea": 1,
+        "vegetarian": 2,
+        "vegetariana": 2,
+    },
+    "ethnicity": {
+        "caucasian": 0,
+        "caucasico": 0,
+        "hispanic": 1,
+        "hispanico": 1,
+        "african": 2,
+        "africano": 2,
+        "asian": 3,
+        "asiatico": 3,
+        "other": 4,
+        "otro": 4,
+    },
+}
+
+BOOLEAN_FEATURES: frozenset[str] = frozenset(
+    {
+        "family_history_ccr",
+        "family_history_polyps",
+        "family_history_lynch",
+        "family_history_fap",
+        "has_ibd",
+        "has_diabetes_t2",
+        "previous_polyps",
+        "previous_cancer",
+        "fobt_positive",
+        "fit_positive",
+    }
+)
+
+BOOL_TRUE_STRINGS = frozenset({"yes", "true", "1", "sí", "si"})

@@ -24,7 +24,6 @@ def run_diagnosis(req: DiagnosisRequest, db: Session = Depends(get_db_dependency
 
     age = (date.today() - patient.date_of_birth).days // 365
 
-    # Base patient dict from DB (legacy fields kept for fusion logic)
     patient_dict = {
         "age": age,
         "gender": patient.gender.value if patient.gender else "unknown",
@@ -35,15 +34,11 @@ def run_diagnosis(req: DiagnosisRequest, db: Session = Depends(get_db_dependency
         "has_ibd": patient.has_ibd,
     }
 
-    # Merge all clinical data fields (both legacy and new)
     patient_dict.update(req.clinical_data.model_dump(exclude_none=True))
 
-    # Inject derived fields for the new tabular model
-    # age_value: use patient age from DB if not explicitly provided
     if "age_value" not in patient_dict or patient_dict.get("age_value") is None:
         patient_dict["age_value"] = float(age)
 
-    # smoking_history: derive from patient smoking_status if not provided
     if (
         "smoking_history" not in patient_dict
         or patient_dict.get("smoking_history") is None
@@ -60,7 +55,6 @@ def run_diagnosis(req: DiagnosisRequest, db: Session = Depends(get_db_dependency
         patient_id=req.patient_id,
     )
 
-    # ── Persist visit to DB ──────────────────────────────────────────────────
     visit_repo = VisitRepository(db)
     clinical = req.clinical_data
 
@@ -105,7 +99,6 @@ def run_diagnosis(req: DiagnosisRequest, db: Session = Depends(get_db_dependency
             "risk_level": rl.get("level", "LOW"),
         }
 
-    # ── visit_data ─────────────────────────────────────────────
     visit_data = {
         "hemoglobin": clinical.hemoglobin or clinical.hemoglobin_g_dl,
         "hematocrit": clinical.hematocrit,
@@ -146,7 +139,7 @@ def run_diagnosis(req: DiagnosisRequest, db: Session = Depends(get_db_dependency
         "history_comparison": result.get("history_analysis"),
         "ai_snapshot": ai_snapshot if ai_snapshot else None,
     }
-    # Determine diagnosis result from risk score
+
     score = result["risk_level"]["score"] if result.get("risk_level") else 0
     if score >= 0.5:
         visit_data["diagnosis_result"] = DiagnosisResultEnum.POSITIVE

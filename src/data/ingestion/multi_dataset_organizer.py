@@ -1,6 +1,24 @@
 """
 Multi-source organizer: Mixes HyperKvasir + CVC-ClinicDB + LIMUC + Curated Colon.
-Breaks data leakage from frame/border artifacts by diversifying sources per class.
+Get data from all available raw sources:
+    - HyperKvasir
+    - CVC-ClinicDB
+    - LIMUC
+    - Curated Colon
+    - Tabular Data
+
+Processing steps:
+    1. Collect images from all available raw sources.
+    2. Log and optionally subsample to ``target_per_class`` images
+       per class using source-stratified sampling.
+    3. Copy selected images to a clean directory with unified naming.
+    4. Run multi-source standardisation preprocessing.
+    5. Build per-image records with mask and metadata.
+    6. Create source-stratified train / val / test splits.
+    7. Register all records in the database.
+    8. Verify source diversity and the absence of data leakage.
+    9. Run the tissue-only preprocessor.
+    10. Run tabular data processing.
 """
 
 from collections import Counter, defaultdict
@@ -14,8 +32,6 @@ import pandas as pd
 from PIL import Image
 from sklearn.model_selection import train_test_split
 from sqlalchemy import inspect as sa_inspect
-
-# from src.data.processing.reverse_logic_processor import ReverseLogicDataAnalyzer
 from tqdm import tqdm
 
 from src.config.constants import (
@@ -25,6 +41,7 @@ from src.config.constants import (
     NORMAL_KEYWORDS,
     NUM_CLASSES,
     POLYP_KEYWORDS,
+    REVERSE_DROP_FEATURES,
     SOURCE_MAP,
     TABULAR_COLON_ACTIVITY_MAP,
     TABULAR_COLON_BINARY_MAP,
@@ -36,6 +53,7 @@ from src.config.constants import (
 )
 from src.config.logger import log as logger
 from src.config.paths import paths
+from src.data.processing.reverse_logic_processor import ReverseLogicDataAnalyzer
 from src.data.processing.standardizer import process_dataset as preprocess
 from src.data.processing.tissue_only_preprocessor import process_dataset_tissue_only
 from src.database.connection import engine, get_db
@@ -130,21 +148,29 @@ class MultiDatasetOrganizer:
 
         logger.info("\n✅ MULTI-SOURCE ORGANIZATION COMPLETED")
 
+    # ═══════════════════════════════════════════════════════════
+    #  TABULAR DATA PROCESSING METHODS
+    # ═══════════════════════════════════════════════════════════
+
     def _process_tabular_dataset(self):
         """
-        Pipeline completo para cargar, limpiar, validar y guardar datos tabulares.
+        Pipeline to process the tabular dataset.
+        Process data from multiple sources.
+        Output 2 csv files for Tabular model training.
         """
         logger.info("\n═══ Phase 10: Tabular Data Processing ═══")
         input_path = paths.RAW_TABULAR / "colorectal_cancer_dataset.csv"
         output_path = paths.TABULAR_PROCESSED / "colorectal_cancer_cleaned.csv"
-        # input_path_alk_smk = paths.RAW_TABULAR / "smoking_drinking_dataset_Ver01.csv"
-        # output_path_alk_smk = paths.PROCESSED_TABULAR / "smoking_drinking_cleaned.csv"
+        input_path_alk_smk = (
+            paths.RAW_TABULAR_SMOKE / "smoking_driking_dataset_Ver01.csv"
+        )
+        output_path_alk_smk = paths.TABULAR_PROCESSED / "smoking_drinking_cleaned.csv"
 
         try:
             df = self._load_colorectal_cancer_csv(input_path)
             df_clean = self._clean_colorectal_dataset(df)
-            # df_alk_smk = self._load_dataset_smoking_drinking(input_path_alk_smk)
-            # df_clean_alk_smk = self._clean_smoking_drinking_dataset(df_alk_smk)
+            df_alk_smk = self._load_dataset_smoking_drinking(input_path_alk_smk)
+            df_clean_alk_smk = self._clean_smoking_drinking_dataset(df_alk_smk)
 
             if df_clean is not None:
                 is_valid = self._validate_colorectal_data(df_clean)
@@ -157,7 +183,7 @@ class MultiDatasetOrganizer:
             else:
                 logger.error("  ❌ Cleaning process returned None.")
 
-            """   if df_clean_alk_smk is not None:
+            if df_clean_alk_smk is not None:
                 is_valid = self._validate_smoking_drinking_data(df_clean_alk_smk)
                 if is_valid:
                     self._save_cleaned_smoking_drinking_dataset(
@@ -168,7 +194,7 @@ class MultiDatasetOrganizer:
                         "  ❌ Tabular smoking/drinking dataset validation failed. File will not be saved."
                     )
             else:
-                logger.error("  ❌ Cleaning process returned None.") """
+                logger.error("  ❌ Cleaning process returned None.")
         except Exception as e:
             logger.error(f"  ❌ Error during tabular processing: {e}")
             import traceback
@@ -176,6 +202,12 @@ class MultiDatasetOrganizer:
             logger.debug(traceback.format_exc())
 
     def _load_colorectal_cancer_csv(self, filepath: Path) -> pd.DataFrame:
+        """Load the colorectal cancer dataset from a CSV file.
+        Args:
+            filepath (Path): Path to the CSV file.
+        Returns:
+            pd.DataFrame: Loaded DataFrame.
+        """
         if not filepath.exists():
             raise FileNotFoundError(f"File not found: {filepath}")
 
@@ -186,14 +218,17 @@ class MultiDatasetOrganizer:
         return df
 
     def _clean_colorectal_dataset(self, df: pd.DataFrame) -> pd.DataFrame | None:
+        """Clean the colorectal cancer dataset.
+        Args:
+            df (pd.DataFrame): Input DataFrame.
+        Returns:
+            pd.DataFrame | None: Cleaned DataFrame or None if validation fails.
+        """
         logger.info("  [CLEAN] Starting data cleaning...")
         df_clean = df.copy()
 
-        # 0: Estandarizar nombres de columnas (eliminar espacios y normalizar)
         df_clean.columns = df_clean.columns.str.strip()
 
-        # 1: IDENTIFICAR Y RENOMBRAR TARGET (Antes de descartar columnas)
-        # Añadimos Survival_Prediction y Survival_5_years como alias comunes
         target_aliases = [
             "Survival_Prediction",
             "Survival_5_years",
@@ -225,8 +260,6 @@ class MultiDatasetOrganizer:
             )
             return None
 
-        # 2: Drop leakage columns (Asegurándonos de no borrar el target ya renombrado)
-        # Filtramos la lista de drop para que no elimine el nuevo nombre del target ni el país si es feature
         cols_to_drop = [
             col
             for col in TABULAR_COLON_COLUMNS_TO_DROP
@@ -237,17 +270,14 @@ class MultiDatasetOrganizer:
         df_clean = df_clean.drop(columns=cols_to_drop)
         logger.info(f"  [CLEAN] Dropped {len(cols_to_drop)} leakage columns.")
 
-        # 3: Manejo de duplicados y nulos
         df_clean = df_clean.drop_duplicates()
         critical_features = [
             col for col in TABULAR_COLON_FEATURES if col in df_clean.columns
         ]
         df_clean = df_clean.dropna(subset=critical_features, how="any")
 
-        # 4: Codificación de variables (Mapeos desde constants.py)
         logger.info("  [CLEAN] Encoding variables...")
 
-        # Mapeos Binarios (Yes/No -> 1/0)
         binary_cols = [
             "Family_History",
             "Smoking_History",
@@ -255,14 +285,13 @@ class MultiDatasetOrganizer:
             "Diabetes",
             "Inflammatory_Bowel_Disease",
             "Genetic_Mutation",
-            TABULAR_COLON_TARGET,  # Survival_Prediction también es Yes/No
+            TABULAR_COLON_TARGET,
         ]
 
         for col in binary_cols:
             if col in df_clean.columns:
                 df_clean[col] = df_clean[col].map(TABULAR_COLON_BINARY_MAP)
 
-        # Mapeos categóricos ordinales
         if "Diet_Risk" in df_clean.columns:
             df_clean["Diet_Risk"] = df_clean["Diet_Risk"].map(
                 TABULAR_COLON_DIET_RISK_MAP
@@ -280,14 +309,12 @@ class MultiDatasetOrganizer:
                 {"Urban": 1, "Rural": 0}
             )
 
-        # BMI (One-hot encoding)
         if "Obesity_BMI" in df_clean.columns:
             bmi_dummies = pd.get_dummies(df_clean["Obesity_BMI"], prefix="BMI")
             df_clean = pd.concat([df_clean, bmi_dummies], axis=1).drop(
                 columns=["Obesity_BMI"]
             )
 
-        # Country (One-hot encoding - Solo si se mantuvo)
         if "Country" in df_clean.columns:
             country_dummies = pd.get_dummies(
                 df_clean["Country"], prefix="Country", drop_first=True
@@ -296,29 +323,33 @@ class MultiDatasetOrganizer:
                 columns=["Country"]
             )
 
-        # 5: Asegurar tipos numéricos
         for col in df_clean.columns:
             df_clean[col] = pd.to_numeric(df_clean[col], errors="coerce")
 
-        # Rellenar nulos finales con 0 o promedios si quedaron tras el coerce
         df_clean = df_clean.fillna(0)
 
         return df_clean
 
     def _validate_colorectal_data(self, df: pd.DataFrame) -> bool:
+        """
+        Validate the colorectal cancer dataset.
+
+        Args:
+            df (pd.DataFrame): Input DataFrame.
+
+        Returns:
+            bool: True if validation passes, False otherwise.
+        """
+
         logger.info("  [VALIDATE] Running checks...")
 
-        # 1. Verificar Target
         if TABULAR_COLON_TARGET not in df.columns:
             logger.error(f"  [VALIDATE] ✗ Target '{TABULAR_COLON_TARGET}' missing.")
             return False
 
-        # 2. Verificar balance de clases
         counts = df[TABULAR_COLON_TARGET].value_counts()
         logger.info(f"  [VALIDATE] Class distribution: {counts.to_dict()}")
 
-        # 3. Verificar Features (considerando las que cambiaron de nombre)
-        # Country y Obesity_BMI cambian de nombre por el get_dummies
         expected_missing = ["Obesity_BMI", "Country"]
         missing = [
             c
@@ -335,11 +366,15 @@ class MultiDatasetOrganizer:
         return True
 
     def _save_cleaned_dataset(self, df: pd.DataFrame, filepath: Path):
+        """Save the cleaned dataset to a CSV file.
+        Args:
+            df (pd.DataFrame): Input DataFrame.
+            filepath (Path): Output file path.
+        """
         filepath.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(filepath, index=False)
         logger.info(f"  [SAVE] Cleaned dataset saved to: {filepath}")
 
-    # Alcohol & Smoking dataset cleaning data and analysis data values
     def _load_dataset_smoking_drinking(self, filepath: Path) -> pd.DataFrame:
         """Load the alcohol & smoking dataset."""
         if not filepath.exists():
@@ -354,6 +389,10 @@ class MultiDatasetOrganizer:
     def _clean_smoking_drinking_dataset(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Clean the alcohol & smoking dataset ensuring correct types and no missing data.
+        Args:
+            df (pd.DataFrame): Input DataFrame.
+        Returns:
+            pd.DataFrame: Cleaned DataFrame.
         """
         logger.info("  [CLEAN] Starting cleaning of alcohol & smoking dataset...")
         df_clean = df.copy()
@@ -361,6 +400,15 @@ class MultiDatasetOrganizer:
         df_clean.columns = df_clean.columns.str.strip()
         df_clean = df_clean.drop_duplicates()
         df_clean = df_clean.dropna()
+
+        # Drop excluded features
+        cols_to_drop = [col for col in REVERSE_DROP_FEATURES if col in df_clean.columns]
+        if cols_to_drop:
+            df_clean = df_clean.drop(columns=cols_to_drop)
+            logger.info(
+                f"  [CLEAN] Dropped {len(cols_to_drop)} excluded columns: {cols_to_drop}"
+            )
+
         numeric_cols = [
             "height",
             "weight",
@@ -385,7 +433,6 @@ class MultiDatasetOrganizer:
             if col in df_clean.columns:
                 df_clean[col] = pd.to_numeric(df_clean[col], errors="coerce")
 
-        # Derived features to enrich reverse-logic models
         if {"weight", "height"}.issubset(df_clean.columns):
             valid_height = df_clean["height"].replace(0, np.nan)
             df_clean["BMI"] = df_clean["weight"] / ((valid_height / 100.0) ** 2)
@@ -408,13 +455,51 @@ class MultiDatasetOrganizer:
         if "DRK_YN" in df_clean.columns:
             df_clean["DRK_YN"] = df_clean["DRK_YN"].map({"Y": "Yes", "N": "No"})
 
+        # ═══════════════════════════════════════════════════════════════════════════
+        # ENGINEERED FEATURES
+        # ═══════════════════════════════════════════════════════════════════════════
+
+        if {"waistline", "height"}.issubset(df_clean.columns):
+            valid_height = df_clean["height"].replace(0, np.nan)
+            df_clean["waist_height_ratio"] = df_clean["waistline"] / valid_height
+
+        if {"hemoglobin", "height"}.issubset(df_clean.columns):
+            valid_height = df_clean["height"].replace(0, np.nan)
+            df_clean["hemoglobin_per_height"] = df_clean["hemoglobin"] / valid_height
+
+        if "gamma_GTP" in df_clean.columns:
+            df_clean["gamma_GTP_log"] = np.log1p(df_clean["gamma_GTP"])
+
+        if {"gamma_GTP", "SGOT_AST", "SGOT_ALT"}.issubset(df_clean.columns):
+            df_clean["liver_index"] = df_clean["gamma_GTP"] * (
+                df_clean["SGOT_AST"] + df_clean["SGOT_ALT"]
+            )
+
+        if {"age", "sex"}.issubset(df_clean.columns):
+            df_clean["age_sex_interaction"] = df_clean["age"] * (
+                df_clean["sex"] == "Male"
+            ).astype(int)
+
+        if "BMI" in df_clean.columns:
+            df_clean["bmi_category"] = pd.cut(
+                df_clean["BMI"],
+                bins=[0, 18.5, 25, 30, 100],
+                labels=[0, 1, 2, 3],
+                include_lowest=True,
+            ).astype("int8")
+
         df_clean = df_clean.replace([np.inf, -np.inf], np.nan)
         df_clean = df_clean.dropna()
 
         return df_clean
 
     def _validate_smoking_drinking_data(self, df: pd.DataFrame) -> bool:
-        """Validate if the dataset contains all required features and targets."""
+        """Validate if the dataset contains all required features and targets.
+        Args:
+            df (pd.DataFrame): Input DataFrame.
+        Returns:
+            bool: True if all required features and targets are present, False otherwise.
+        """
         logger.info("  [VALIDATE] Running checks on alcohol & smoking dataset...")
 
         from src.config.constants import (
@@ -444,12 +529,20 @@ class MultiDatasetOrganizer:
         return True
 
     def _save_cleaned_smoking_drinking_dataset(self, df: pd.DataFrame, filepath: Path):
-        """Save the cleaned dataset to disk."""
+        """Save the cleaned dataset to disk.
+        Args:
+            df (pd.DataFrame): Input DataFrame.
+            filepath (Path): Output file path.
+        """
         filepath.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(filepath, index=False)
         logger.info(f"  [SAVE] Cleaned dataset saved to: {filepath}")
-        # analyzer = ReverseLogicDataAnalyzer()
-        # analyzer.generate_dataset_report(df)
+        analyzer = ReverseLogicDataAnalyzer()
+        analyzer.generate_dataset_report(df)
+
+    # ═══════════════════════════════════════════════════════════
+    #  IMAGE PROCESSING METHODS
+    # ═══════════════════════════════════════════════════════════
 
     def _start_tissue_preprocessor(self):
         """

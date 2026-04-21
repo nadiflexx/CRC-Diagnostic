@@ -1,6 +1,9 @@
-# frontend/pages/endoscopy.py
 """
-Endoscopy AI Inference — Image & Video modes.
+Endoscopic AI Analysis · Endo-AID
+
+Deep learning classification of colonic mucosa (polyp / inflammation / normal),
+Grad-CAM explainability maps, and U-Net polyp segmentation.
+Supports single-image and video batch inference modes.
 """
 
 from __future__ import annotations
@@ -30,20 +33,16 @@ from utils.video_processor import (
 )
 
 st.set_page_config(
-    page_title="Endoscopia IA · Endo-AID",
+    page_title="Endoscopic AI Analysis · Endo-AID",
     page_icon="🌿",
     layout="wide",
 )
 apply_custom_css()
 render_sidebar()
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  CONSTANTS
-# ─────────────────────────────────────────────────────────────────────────────
-
 _CLASS_MAP = {
-    "polyp": ("Pólipo Detectado", "red"),
-    "inflammation": ("Inflamación / Colitis", "orange"),
+    "polyp": ("Polyp Detected", "red"),
+    "inflammation": ("Inflammation / Colitis", "orange"),
 }
 
 _COLOR_MAP = {
@@ -59,15 +58,17 @@ _SUMMARY_ICONS = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def render() -> None:
+    """
+    Main entry point for the Endoscopic AI Analysis page.
+
+    Renders the patient selector and delegates to the image / video
+    tab renderer.
+    """
     page_header(
-        "Inferencia Visual (Endoscopia IA)",
-        "Clasificación, Ensemble Adaptativo y Segmentación por U-Net.",
+        "Endoscopic AI Analysis",
+        "Colonic mucosa classification, Grad-CAM explainability, "
+        "and U-Net polyp segmentation.",
         icon="🔬",
     )
 
@@ -75,29 +76,27 @@ def render() -> None:
     if not patients:
         show_empty_state(
             "🔬",
-            "No hay pacientes registrados",
-            "Registre pacientes antes de ejecutar la inferencia visual.",
+            "No patients registered",
+            "Register patients before running visual inference.",
         )
         return
 
     opts = build_patient_options(patients)
     col_sel, _ = st.columns([1, 2])
     with col_sel:
-        pid = opts[st.selectbox("Paciente", list(opts.keys()))]
+        pid = opts[st.selectbox("Patient", list(opts.keys()))]
 
     st.markdown("<br>", unsafe_allow_html=True)
-
-    # ── Mode selector ──────────────────────────────────────────────────────
     _render_mode_tabs(pid)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  MODE TABS
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _render_mode_tabs(pid: int) -> None:
-    """Render Image / Video tab selector."""
+    """
+    Render the Image / Video inference tab selector.
+
+    Args:
+        pid: Selected patient ID passed down to each inference pipeline.
+    """
     st.markdown(
         """
         <style>
@@ -111,7 +110,7 @@ def _render_mode_tabs(pid: int) -> None:
         unsafe_allow_html=True,
     )
 
-    tab_image, tab_video = st.tabs(["🖼️  Imagen Endoscópica", "🎥  Vídeo Endoscópico"])
+    tab_image, tab_video = st.tabs(["🖼️  Endoscopic Image", "🎥  Endoscopic Video"])
 
     with tab_image:
         _render_image_mode(pid)
@@ -120,21 +119,21 @@ def _render_mode_tabs(pid: int) -> None:
         _render_video_mode(pid)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  IMAGE MODE  (original behaviour, unchanged)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _render_image_mode(pid: int) -> None:
-    """Single-frame upload and inference (original mode)."""
+    """
+    Render the single-frame upload and inference panel.
+
+    Args:
+        pid: Selected patient ID forwarded to the upload and diagnosis endpoints.
+    """
     st.markdown("<br>", unsafe_allow_html=True)
     col_up, col_preview = st.columns([2, 1], gap="large")
 
     with col_up:
         uploaded = st.file_uploader(
-            "Subir Fotograma Endoscópico",
+            "Upload Endoscopic Frame",
             type=["jpg", "png", "jpeg"],
-            help="Imagen de colonoscopia en formato JPG o PNG.",
+            help="Colonoscopy image in JPG or PNG format.",
             key="img_uploader",
         )
 
@@ -142,7 +141,7 @@ def _render_image_mode(pid: int) -> None:
         if uploaded:
             st.markdown(
                 "<p style='font-weight:600; color:#5a8d7f; font-size:0.85rem;'>"
-                "Previsualización</p>",
+                "Preview</p>",
                 unsafe_allow_html=True,
             )
             st.markdown(
@@ -156,20 +155,19 @@ def _render_image_mode(pid: int) -> None:
 
     if uploaded:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🧠 Procesar Fotograma con IA", type="primary", key="btn_img"):
+        if st.button("🧠 Process Frame with AI", type="primary", key="btn_img"):
             _run_single_pipeline(pid, uploaded)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  VIDEO MODE
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _render_video_mode(pid: int) -> None:
-    """Video upload → frame extraction → batch inference → summary."""
+    """
+    Render the video upload, frame extraction configuration, and inference panel.
+
+    Args:
+        pid: Selected patient ID forwarded to the upload and diagnosis endpoints.
+    """
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Info banner ────────────────────────────────────────────────────────
     st.markdown(
         f"""
         <div style="
@@ -181,11 +179,11 @@ def _render_video_mode(pid: int) -> None:
             color: #0c5460;
             font-size: 0.88rem;
         ">
-            <b>🎥 Modo Vídeo Endoscópico</b><br>
-            Sube un vídeo de hasta <b>{MAX_VIDEO_DURATION_SECONDS} segundos</b>.
-            El sistema extraerá automáticamente un fotograma cada
-            <b>{FRAME_INTERVAL_SECONDS} segundos</b>, analizará cada uno con los modelos
-            de IA y generará un <b>resumen clínico global</b> con todos los hallazgos.
+            <b>🎥 Video Mode</b><br>
+            Upload a video up to <b>{MAX_VIDEO_DURATION_SECONDS} seconds</b>.
+            The system will automatically extract one frame every
+            <b>{FRAME_INTERVAL_SECONDS} seconds</b>, analyse each with the AI
+            models, and generate a <b>global clinical summary</b> of all findings.
         </div>
         """,
         unsafe_allow_html=True,
@@ -195,64 +193,64 @@ def _render_video_mode(pid: int) -> None:
 
     with col_up:
         video_file = st.file_uploader(
-            "Subir Vídeo Endoscópico",
+            "Upload Endoscopic Video",
             type=["mp4", "avi", "mov", "mkv"],
-            help=f"Vídeo de colonoscopia. Máximo {MAX_VIDEO_DURATION_SECONDS}s.",
+            help=f"Colonoscopy video. Maximum {MAX_VIDEO_DURATION_SECONDS}s.",
             key="video_uploader",
         )
 
     with col_cfg:
         st.markdown(
             "<p style='font-weight:600; color:#5a8d7f; font-size:0.85rem; "
-            "margin-bottom:0.25rem;'>Configuración de Extracción</p>",
+            "margin-bottom:0.25rem;'>Extraction Configuration</p>",
             unsafe_allow_html=True,
         )
         interval = st.slider(
-            "Intervalo entre fotogramas (s)",
+            "Frame interval (s)",
             min_value=1,
             max_value=10,
             value=FRAME_INTERVAL_SECONDS,
             step=1,
             key="frame_interval",
-            help="Cada cuántos segundos se extrae un fotograma del vídeo.",
+            help="How many seconds between extracted frames.",
         )
         st.markdown(
             "<p style='font-size:0.8rem; color:#6c757d; margin-top:0.25rem;'>"
-            f"⏱ Con {interval}s de intervalo y {MAX_VIDEO_DURATION_SECONDS}s "
-            f"de vídeo → máx. "
-            f"<b>{MAX_VIDEO_DURATION_SECONDS // interval + 1} fotogramas</b>."
+            f"⏱ With {interval}s interval and {MAX_VIDEO_DURATION_SECONDS}s "
+            f"video → max. "
+            f"<b>{MAX_VIDEO_DURATION_SECONDS // interval + 1} frames</b>."
             "</p>",
             unsafe_allow_html=True,
         )
 
     if video_file:
-        # Preview
         st.markdown("<br>", unsafe_allow_html=True)
-        with st.expander("▶️  Previsualizar Vídeo", expanded=False):
+        with st.expander("▶️  Preview Video", expanded=False):
             st.video(video_file)
             video_file.seek(0)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button(
-            "🧠 Analizar Vídeo con IA",
-            type="primary",
-            key="btn_video",
-        ):
+        if st.button("🧠 Analyse Video with AI", type="primary", key="btn_video"):
             _run_video_pipeline(pid, video_file, interval)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  SINGLE IMAGE PIPELINE  (unchanged logic)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _run_single_pipeline(pid: int, uploaded) -> None:
-    """Full AI inference pipeline for a single frame."""
+    """
+    Execute the full AI inference pipeline for a single endoscopic frame.
+
+    Uploads the image, calls the diagnosis endpoint, and renders the
+    classification result, Grad-CAM maps, segmentation report, and
+    confidence detail expander.
+
+    Args:
+        pid: Selected patient ID.
+        uploaded: Streamlit UploadedFile object for the colonoscopy image.
+    """
     placeholder = st.empty()
     placeholder.markdown(
         _loader_html(
-            "Computando Modelos Neuronales...",
-            "Generando Grad-CAMs y Segmentación U-Net",
+            "Computing Neural Models…",
+            "Generating Grad-CAMs and U-Net Segmentation",
         ),
         unsafe_allow_html=True,
     )
@@ -260,7 +258,7 @@ def _run_single_pipeline(pid: int, uploaded) -> None:
     upload_res = upload_colonoscopy_image(pid, uploaded)
     if not upload_res:
         placeholder.empty()
-        st.error("❌ Error al subir la imagen. Verifique la conexión.")
+        st.error("❌ Error uploading the image. Please check the connection.")
         return
 
     result = run_diagnosis(
@@ -273,7 +271,7 @@ def _run_single_pipeline(pid: int, uploaded) -> None:
     placeholder.empty()
 
     if not result or not result.get("image_analysis"):
-        st.error("❌ No se recibió respuesta del modelo.")
+        st.error("❌ No response received from the model.")
         return
 
     img = result["image_analysis"]
@@ -281,8 +279,8 @@ def _run_single_pipeline(pid: int, uploaded) -> None:
     score = img["prediction_score"]
     probs = img.get("probabilities", {})
 
-    label, level = _CLASS_MAP.get(cls, ("Mucosa Sana", "green"))
-    show_result_banner(f"Diagnóstico: {label}", f"{score:.1%}", level)
+    label, level = _CLASS_MAP.get(cls, ("Healthy Mucosa", "green"))
+    show_result_banner(f"Diagnosis: {label}", f"{score:.1%}", level)
 
     _render_image_grid(uploaded, img)
 
@@ -292,26 +290,26 @@ def _run_single_pipeline(pid: int, uploaded) -> None:
     _render_detail_expander(img, cls, score, probs)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  VIDEO PIPELINE
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _run_video_pipeline(pid: int, video_file, interval: int) -> None:
     """
-    Full video inference pipeline:
-    1. Extract frames
-    2. Upload + infer each frame
-    3. Display per-frame results
-    4. Show global summary
-    """
+    Execute the full video inference pipeline.
 
-    # ── Step 1: Extract frames ─────────────────────────────────────────────
+    Steps:
+        1. Extract frames at the configured interval.
+        2. Upload and infer each frame via the backend.
+        3. Display per-frame expandable results.
+        4. Render a global clinical summary with timeline.
+
+    Args:
+        pid: Selected patient ID.
+        video_file: Streamlit UploadedFile or seekable file-like object.
+        interval: Frame extraction interval in seconds.
+    """
     extract_placeholder = st.empty()
     extract_placeholder.markdown(
         _loader_html(
-            "Extrayendo Fotogramas del Vídeo...",
-            f"Un fotograma cada {interval}s",
+            "Extracting Video Frames…",
+            f"One frame every {interval}s",
         ),
         unsafe_allow_html=True,
     )
@@ -325,13 +323,13 @@ def _run_video_pipeline(pid: int, video_file, interval: int) -> None:
         )
     except Exception as e:
         extract_placeholder.empty()
-        st.error(f"❌ Error al procesar el vídeo: {e}")
+        st.error(f"❌ Error processing video: {e}")
         return
 
     extract_placeholder.empty()
 
     if not frames:
-        st.warning("⚠️ No se pudieron extraer fotogramas del vídeo.")
+        st.warning("⚠️ No frames could be extracted from the video.")
         return
 
     st.markdown(
@@ -345,35 +343,30 @@ def _run_video_pipeline(pid: int, video_file, interval: int) -> None:
             font-size: 0.88rem;
             color: #2d5a4e;
         ">
-            ✅ <b>{len(frames)} fotogramas extraídos</b> correctamente del vídeo.
-            Iniciando análisis con IA…
+            ✅ <b>{len(frames)} frames extracted</b> successfully.
+            Starting AI analysis…
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # ── Step 2: Infer each frame ───────────────────────────────────────────
     frame_results: list[dict] = []
-    progress_bar = st.progress(0, text="Analizando fotogramas…")
+    progress_bar = st.progress(0, text="Analysing frames…")
     status_text = st.empty()
 
     for i, frame in enumerate(frames):
         status_text.markdown(
             f"<p style='color:#5a8d7f; font-size:0.85rem;'>"
-            f"🔬 Analizando fotograma {i + 1}/{len(frames)} "
+            f"🔬 Analysing frame {i + 1}/{len(frames)} "
             f"(t={frame['timestamp']}s)…</p>",
             unsafe_allow_html=True,
         )
 
-        # ── Construir _FrameFile desde los bytes del PIL guardado ──────
         buf = io.BytesIO()
         frame["image"].save(buf, format="JPEG", quality=92)
-        frame_bytes = buf.getvalue()  # bytes completos, seguros
+        frame_bytes = buf.getvalue()
 
-        frame_file = _FrameFile(
-            data=frame_bytes,
-            name=frame["filename"],
-        )
+        frame_file = _FrameFile(data=frame_bytes, name=frame["filename"])
 
         upload_res = upload_colonoscopy_image(pid, frame_file)
         if not upload_res:
@@ -409,22 +402,25 @@ def _run_video_pipeline(pid: int, video_file, interval: int) -> None:
     progress_bar.empty()
     status_text.empty()
 
-    # ── Step 3: Render per-frame results ───────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     _render_video_frame_results(frame_results)
 
-    # ── Step 4: Global summary ─────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     _render_video_summary(frame_results)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  VIDEO RESULTS — PER FRAME
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _render_video_frame_results(frame_results: list[dict]) -> None:
-    """Render an expandable card for each analysed frame."""
+    """
+    Render an expandable card for each analysed video frame.
+
+    Each card shows the original frame, the classification badge,
+    probability bars, and Grad-CAM / segmentation outputs when available.
+    Frames that failed inference display an error notice.
+
+    Args:
+        frame_results: List of dicts with keys ``timestamp``, ``pil_image``,
+            ``error``, and ``result``.
+    """
     st.markdown(
         """
         <div style="
@@ -436,7 +432,7 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
             align-items: center;
             gap: 0.5rem;
         ">
-            🎞️ Resultados por Fotograma
+            🎞️ Per-Frame Results
         </div>
         """,
         unsafe_allow_html=True,
@@ -448,7 +444,7 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
         img_b64 = get_pil_image_base64(pil_img)
 
         if fr["error"] or not fr["result"]:
-            with st.expander(f"⏱ t={ts}s — ⚠️ Error en el análisis", expanded=False):
+            with st.expander(f"⏱ t={ts}s — ⚠️ Analysis error", expanded=False):
                 col_a, col_b = st.columns([1, 2])
                 with col_a:
                     st.markdown(
@@ -458,16 +454,14 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
                         unsafe_allow_html=True,
                     )
                 with col_b:
-                    st.error(
-                        "No se pudo obtener respuesta del modelo para este fotograma."
-                    )
+                    st.error("Could not obtain a model response for this frame.")
             continue
 
         img_analysis = fr["result"]["image_analysis"]
         cls = img_analysis["prediction_class"]
         score = img_analysis["prediction_score"]
         probs = img_analysis.get("probabilities", {})
-        label, _ = _CLASS_MAP.get(cls, ("Mucosa Sana", "green"))
+        label, _ = _CLASS_MAP.get(cls, ("Healthy Mucosa", "green"))
         color = _COLOR_MAP.get(cls, "#388E3C")
         icon = _SUMMARY_ICONS.get(cls, "🟢")
 
@@ -477,7 +471,6 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
             col_img, col_info = st.columns([1, 2], gap="large")
 
             with col_img:
-                # Original frame
                 st.markdown(
                     f'<div class="preview-card">'
                     f'<img src="{img_b64}" alt="Frame {ts}s">'
@@ -491,7 +484,6 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
                 )
 
             with col_info:
-                # Diagnosis badge
                 st.markdown(
                     f"""
                     <div style="
@@ -510,7 +502,7 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
                                 {label}
                             </div>
                             <div style="font-size:0.82rem; color:#555;">
-                                Confianza: <b>{score:.1%}</b>
+                                Confidence: <b>{score:.1%}</b>
                             </div>
                         </div>
                     </div>
@@ -518,7 +510,6 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
                     unsafe_allow_html=True,
                 )
 
-                # Probability bars
                 if probs:
                     sorted_probs = sorted(
                         probs.items(), key=lambda x: x[1], reverse=True
@@ -557,7 +548,6 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
                             unsafe_allow_html=True,
                         )
 
-            # GradCAM + segmentation inside expander
             has_gradcam = bool(
                 img_analysis.get("gradcam_fusion") or img_analysis.get("gradcam_a")
             )
@@ -565,10 +555,11 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
             if has_gradcam:
                 st.markdown(
                     "<p style='font-weight:600; color:#5a8d7f; "
-                    "font-size:0.82rem; margin-top:0.75rem;'>Mapas de Activación (Grad-CAM)</p>",
+                    "font-size:0.82rem; margin-top:0.75rem;'>"
+                    "Activation Maps (Grad-CAM)</p>",
                     unsafe_allow_html=True,
                 )
-                cards_html = image_grid_card(img_b64, "Original", "Fotograma")
+                cards_html = image_grid_card(img_b64, "Original", "Frame")
 
                 alpha = img_analysis.get("alpha_used", 0)
                 beta = img_analysis.get("beta_used", 0)
@@ -576,20 +567,20 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
                 if img_analysis.get("gradcam_a"):
                     cards_html += image_grid_card(
                         img_analysis["gradcam_a"],
-                        "Modelo A",
-                        f"Atención Contexto ({alpha:.0%})",
+                        "Model A",
+                        f"Context Attention ({alpha:.0%})",
                     )
                 if img_analysis.get("gradcam_b"):
                     cards_html += image_grid_card(
                         img_analysis["gradcam_b"],
-                        "Modelo B",
-                        f"Atención Tejido ({beta:.0%})",
+                        "Model B",
+                        f"Tissue Attention ({beta:.0%})",
                     )
                 if img_analysis.get("gradcam_fusion"):
                     cards_html += image_grid_card(
                         img_analysis["gradcam_fusion"],
-                        "Fusión Ensemble",
-                        "Decisión Final",
+                        "Ensemble Fusion",
+                        "Final Decision",
                         special=True,
                     )
                 render_xai_grid(cards_html)
@@ -598,13 +589,17 @@ def _render_video_frame_results(frame_results: list[dict]) -> None:
                 render_segmentation(img_analysis["report_path"])
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  VIDEO RESULTS — GLOBAL SUMMARY
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _render_video_summary(frame_results: list[dict]) -> None:
-    """Compute and render global findings summary from all analysed frames."""
+    """
+    Compute and render the global clinical summary for all analysed frames.
+
+    Aggregates per-frame classifications, computes polyp and inflammation
+    timestamps, determines the overall risk level, and renders metrics,
+    distribution bars, findings detail, clinical recommendation, and timeline.
+
+    Args:
+        frame_results: List of per-frame result dicts from the inference loop.
+    """
     valid = [
         fr
         for fr in frame_results
@@ -612,10 +607,9 @@ def _render_video_summary(frame_results: list[dict]) -> None:
     ]
 
     if not valid:
-        st.warning("⚠️ No hay fotogramas válidos para generar el resumen.")
+        st.warning("⚠️ No valid frames available to generate the summary.")
         return
 
-    # ── Aggregate stats ────────────────────────────────────────────────────
     class_counts: dict[str, int] = {"polyp": 0, "inflammation": 0, "normal": 0}
     polyp_timestamps: list[float] = []
     inflammation_timestamps: list[float] = []
@@ -643,28 +637,25 @@ def _render_video_summary(frame_results: list[dict]) -> None:
         sum(fr["result"]["image_analysis"]["prediction_score"] for fr in valid) / total
     )
 
-    # ── Overall risk level ─────────────────────────────────────────────────
     if class_counts["polyp"] > 0:
-        overall_risk = "ALTO"
+        overall_risk = "HIGH"
         risk_color = "#D32F2F"
         overall_icon = "🔴"
-        overall_label = "Pólipo detectado — Requiere atención urgente"
+        overall_label = "Polyp detected — Urgent attention required"
         risk_bg = "rgba(211,47,47,0.08)"
     elif class_counts["inflammation"] > 0:
-        overall_risk = "MODERADO"
+        overall_risk = "MODERATE"
         risk_color = "#F57C00"
         overall_icon = "🟠"
-        overall_label = "Signos inflamatorios — Seguimiento recomendado"
+        overall_label = "Inflammatory signs — Follow-up recommended"
         risk_bg = "rgba(245,124,0,0.08)"
     else:
-        overall_risk = "BAJO"
+        overall_risk = "LOW"
         risk_color = "#388E3C"
         overall_icon = "🟢"
-        overall_label = "Mucosa normal — Sin hallazgos significativos"
+        overall_label = "Normal mucosa — No significant findings"
         risk_bg = "rgba(56,142,60,0.08)"
 
-    # ── Render header card ─────────────────────────────────────────────────
-    # Construimos el HTML en partes para evitar problemas con f-strings anidados
     header_html = (
         '<div style="'
         "background: linear-gradient(135deg, #f8fffe 0%, #edf7f4 100%);"
@@ -673,7 +664,6 @@ def _render_video_summary(frame_results: list[dict]) -> None:
         "padding: 1.75rem 2rem;"
         "margin-bottom: 1.5rem;"
         'box-shadow: 0 4px 20px rgba(90,141,127,0.12);">'
-        # Título
         '<div style="'
         "display: flex;"
         "align-items: center;"
@@ -684,14 +674,13 @@ def _render_video_summary(frame_results: list[dict]) -> None:
         '<span style="font-size:1.8rem;">📋</span>'
         "<div>"
         '<div style="font-size:1.1rem; font-weight:700; color:#2d5a4e;">'
-        "Resumen Clínico Global del Vídeo"
+        "Global Clinical Video Summary"
         "</div>"
         '<div style="font-size:0.82rem; color:#6c757d;">'
-        f"{total} fotogramas analizados · Confianza media: <b>{avg_confidence:.1%}</b>"
+        f"{total} frames analysed · Average confidence: <b>{avg_confidence:.1%}</b>"
         "</div>"
         "</div>"
         "</div>"
-        # Risk badge — sin comentario HTML, colores via rgba()
         f'<div style="'
         f"background: {risk_bg};"
         f"border: 2px solid {risk_color};"
@@ -704,7 +693,7 @@ def _render_video_summary(frame_results: list[dict]) -> None:
         f'<span style="font-size:1.6rem;">{overall_icon}</span>'
         "<div>"
         f'<div style="font-weight:700; font-size:1rem; color:{risk_color};">'
-        f"Riesgo {overall_risk}"
+        f"{overall_risk} Risk"
         "</div>"
         f'<div style="font-size:0.85rem; color:#555;">{overall_label}</div>'
         "</div>"
@@ -713,54 +702,52 @@ def _render_video_summary(frame_results: list[dict]) -> None:
     )
     st.markdown(header_html, unsafe_allow_html=True)
 
-    # ── Metrics row ────────────────────────────────────────────────────────
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("🎞️ Fotogramas Analizados", total)
+    col1.metric("🎞️ Frames Analysed", total)
     col2.metric(
-        "🔴 Fotogramas con Pólipo",
+        "🔴 Frames with Polyp",
         class_counts["polyp"],
-        delta=f"{polyp_pct:.0%} del total" if class_counts["polyp"] else None,
+        delta=f"{polyp_pct:.0%} of total" if class_counts["polyp"] else None,
         delta_color="inverse",
     )
     col3.metric(
-        "🟠 Con Inflamación",
+        "🟠 With Inflammation",
         class_counts["inflammation"],
-        delta=f"{inflammation_pct:.0%} del total"
+        delta=f"{inflammation_pct:.0%} of total"
         if class_counts["inflammation"]
         else None,
         delta_color="inverse",
     )
-    col4.metric("🟢 Mucosa Normal", class_counts["normal"])
+    col4.metric("🟢 Normal Mucosa", class_counts["normal"])
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Distribution + detail ──────────────────────────────────────────────
     col_chart, col_detail = st.columns([1, 1], gap="large")
 
     with col_chart:
         st.markdown(
             "<p style='font-weight:600; color:#2d5a4e; font-size:0.9rem;"
-            "margin-bottom:0.5rem;'>📊 Distribución de Hallazgos</p>",
+            "margin-bottom:0.5rem;'>📊 Findings Distribution</p>",
             unsafe_allow_html=True,
         )
         _render_summary_bar(
-            "🔴 Pólipo", polyp_pct, "#D32F2F", class_counts["polyp"], total
+            "🔴 Polyp", polyp_pct, "#D32F2F", class_counts["polyp"], total
         )
         _render_summary_bar(
-            "🟠 Inflamación",
+            "🟠 Inflammation",
             inflammation_pct,
             "#F57C00",
             class_counts["inflammation"],
             total,
         )
         _render_summary_bar(
-            "🟢 Mucosa Normal", normal_pct, "#388E3C", class_counts["normal"], total
+            "🟢 Normal Mucosa", normal_pct, "#388E3C", class_counts["normal"], total
         )
 
     with col_detail:
         st.markdown(
             "<p style='font-weight:600; color:#2d5a4e; font-size:0.9rem;"
-            "margin-bottom:0.5rem;'>🔍 Detalle de Hallazgos</p>",
+            "margin-bottom:0.5rem;'>🔍 Findings Detail</p>",
             unsafe_allow_html=True,
         )
         _render_detail_findings(
@@ -772,13 +759,11 @@ def _render_video_summary(frame_results: list[dict]) -> None:
             max_inflammation_score,
         )
 
-    # ── Clinical recommendation ────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     _render_clinical_recommendation(
         class_counts, polyp_timestamps, inflammation_timestamps, total
     )
 
-    # ── Timeline strip ─────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     _render_timeline(frame_results)
 
@@ -791,8 +776,18 @@ def _render_detail_findings(
     max_polyp_score: float,
     max_inflammation_score: float,
 ) -> None:
-    """Render the findings detail column using st.container blocks (no f-string HTML issues)."""
+    """
+    Render the findings detail column with colour-coded summary cards.
 
+    Args:
+        class_counts: Dict mapping ``"polyp"``, ``"inflammation"``, ``"normal"``
+            to their respective frame counts.
+        polyp_timestamps: List of timestamps (seconds) where polyps were detected.
+        inflammation_timestamps: List of timestamps where inflammation was detected.
+        normal_pct: Fraction of frames classified as normal mucosa.
+        max_polyp_score: Highest polyp confidence score across all frames.
+        max_inflammation_score: Highest inflammation confidence score across all frames.
+    """
     if polyp_timestamps:
         ts_fmt = ", ".join(f"{t}s" for t in polyp_timestamps)
         st.markdown(
@@ -804,9 +799,9 @@ def _render_detail_findings(
             "margin-bottom:0.5rem;"
             "font-size:0.84rem;"
             "'>"
-            "<b style='color:#D32F2F;'>🔴 Pólipos detectados</b><br>"
-            f"Instantes: <code>{ts_fmt}</code><br>"
-            f"Confianza máxima: <b>{max_polyp_score:.1%}</b>"
+            "<b style='color:#D32F2F;'>🔴 Polyps detected</b><br>"
+            f"Timestamps: <code>{ts_fmt}</code><br>"
+            f"Maximum confidence: <b>{max_polyp_score:.1%}</b>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -822,9 +817,9 @@ def _render_detail_findings(
             "margin-bottom:0.5rem;"
             "font-size:0.84rem;"
             "'>"
-            "<b style='color:#F57C00;'>🟠 Inflamación detectada</b><br>"
-            f"Instantes: <code>{ts_fmt}</code><br>"
-            f"Confianza máxima: <b>{max_inflammation_score:.1%}</b>"
+            "<b style='color:#F57C00;'>🟠 Inflammation detected</b><br>"
+            f"Timestamps: <code>{ts_fmt}</code><br>"
+            f"Maximum confidence: <b>{max_inflammation_score:.1%}</b>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -839,16 +834,16 @@ def _render_detail_findings(
             "margin-bottom:0.5rem;"
             "font-size:0.84rem;"
             "'>"
-            "<b style='color:#388E3C;'>🟢 Mucosa normal</b><br>"
-            f"{class_counts['normal']} fotogramas sin hallazgos significativos "
-            f"({normal_pct:.0%} del total)."
+            "<b style='color:#388E3C;'>🟢 Normal mucosa</b><br>"
+            f"{class_counts['normal']} frames with no significant findings "
+            f"({normal_pct:.0%} of total)."
             "</div>",
             unsafe_allow_html=True,
         )
 
     if not any([polyp_timestamps, inflammation_timestamps, class_counts["normal"]]):
         st.markdown(
-            "<p style='color:#6c757d; font-size:0.84rem;'>Sin hallazgos registrables.</p>",
+            "<p style='color:#6c757d; font-size:0.84rem;'>No recordable findings.</p>",
             unsafe_allow_html=True,
         )
 
@@ -860,7 +855,16 @@ def _render_summary_bar(
     count: int,
     total: int,
 ) -> None:
-    """Render a labeled horizontal progress bar for the summary."""
+    """
+    Render a labelled horizontal progress bar for the video summary section.
+
+    Args:
+        label: Display label shown above the bar (e.g. ``"🔴 Polyp"``).
+        pct: Fraction in [0, 1] that determines the bar fill width.
+        color: Hex colour string for the filled portion of the bar.
+        count: Absolute count used in the right-side label.
+        total: Total frame count used in the right-side label.
+    """
     st.markdown(
         f"""
         <div style="margin-bottom: 0.6rem;">
@@ -899,40 +903,44 @@ def _render_clinical_recommendation(
     inflammation_ts: list,
     total: int,
 ) -> None:
-    """Render clinical recommendation box based on findings."""
+    """
+    Render a colour-coded clinical recommendation box based on video findings.
+
+    Priority: polyp > inflammation > normal.
+
+    Args:
+        class_counts: Dict of classification counts per class.
+        polyp_ts: Timestamps (seconds) where polyps were detected.
+        inflammation_ts: Timestamps where inflammation was detected.
+        total: Total number of analysed frames.
+    """
     if class_counts["polyp"] > 0:
-        bg = "#FFEBEE"
-        border = "#D32F2F"
-        icon = "🔴"
-        title = "Recomendación Clínica — URGENTE"
+        bg, border, icon = "#FFEBEE", "#D32F2F", "🔴"
+        title = "Clinical Recommendation — URGENT"
         lines = [
-            f"Se han detectado <b>pólipos</b> en {class_counts['polyp']} "
-            f"de {total} fotogramas analizados.",
-            f"Instantes de detección: <b>{', '.join(f'{t}s' for t in polyp_ts)}</b>.",
-            "Se recomienda <b>polipectomía</b> y revisión por especialista "
-            "en el menor tiempo posible.",
+            f"<b>Polyps</b> detected in {class_counts['polyp']} "
+            f"of {total} analysed frames.",
+            f"Detection timestamps: <b>{', '.join(f'{t}s' for t in polyp_ts)}</b>.",
+            "<b>Polypectomy</b> and specialist review are recommended "
+            "as soon as possible.",
         ]
     elif class_counts["inflammation"] > 0:
-        bg = "#FFF3E0"
-        border = "#F57C00"
-        icon = "🟠"
-        title = "Recomendación Clínica — SEGUIMIENTO"
+        bg, border, icon = "#FFF3E0", "#F57C00", "🟠"
+        title = "Clinical Recommendation — FOLLOW-UP"
         lines = [
-            f"Se han observado <b>signos inflamatorios</b> en "
-            f"{class_counts['inflammation']} fotogramas.",
-            f"Instantes: <b>{', '.join(f'{t}s' for t in inflammation_ts)}</b>.",
-            "Se recomienda evaluación de <b>tratamiento antiinflamatorio</b> "
-            "y seguimiento estrecho.",
+            f"<b>Inflammatory signs</b> observed in "
+            f"{class_counts['inflammation']} frames.",
+            f"Timestamps: <b>{', '.join(f'{t}s' for t in inflammation_ts)}</b>.",
+            "Evaluation of <b>anti-inflammatory treatment</b> and "
+            "close follow-up are recommended.",
         ]
     else:
-        bg = "#E8F5E9"
-        border = "#388E3C"
-        icon = "🟢"
-        title = "Recomendación Clínica — RUTINA"
+        bg, border, icon = "#E8F5E9", "#388E3C", "🟢"
+        title = "Clinical Recommendation — ROUTINE"
         lines = [
-            f"Los {total} fotogramas analizados muestran <b>mucosa sana</b>.",
-            "No se detectaron pólipos ni signos de inflamación significativos.",
-            "Continuar con el <b>programa de cribado habitual</b>.",
+            f"All {total} analysed frames show <b>healthy mucosa</b>.",
+            "No polyps or significant inflammatory signs were detected.",
+            "Continue with the <b>standard screening programme</b>.",
         ]
 
     body = "".join(f"<li style='margin-bottom:4px;'>{line}</li>" for line in lines)
@@ -971,7 +979,17 @@ def _render_clinical_recommendation(
 
 
 def _render_timeline(frame_results: list[dict]) -> None:
-    """Render a visual timeline strip of all analysed frames."""
+    """
+    Render a horizontal scrollable visual timeline of all analysed frames.
+
+    Each frame is represented by a coloured dot with the timestamp and
+    confidence score beneath it. Failed frames show a grey warning dot.
+    Dots are connected by thin horizontal lines.
+
+    Args:
+        frame_results: Full list of per-frame result dicts, including
+            failed frames.
+    """
     valid = [
         fr
         for fr in frame_results
@@ -982,11 +1000,10 @@ def _render_timeline(frame_results: list[dict]) -> None:
 
     st.markdown(
         "<p style='font-weight:600; color:#2d5a4e; font-size:0.9rem;"
-        "margin-bottom:0.75rem;'>⏱ Línea de Tiempo del Análisis</p>",
+        "margin-bottom:0.75rem;'>⏱ Analysis Timeline</p>",
         unsafe_allow_html=True,
     )
 
-    # ── Construimos cada nodo por separado para evitar problemas ──────────
     connector = (
         "<div style='"
         "flex:1; height:2px; background:#dee2e6;"
@@ -1009,7 +1026,6 @@ def _render_timeline(frame_results: list[dict]) -> None:
             icon = _SUMMARY_ICONS.get(cls, "🟢")
             score = fr["result"]["image_analysis"]["prediction_score"]
             conf = f"{score:.0%}"
-            # rgba equivalente al hex + "22" (~13% opacidad)
             rgba_map = {
                 "#D32F2F": "rgba(211,47,47,0.13)",
                 "#F57C00": "rgba(245,124,0,0.13)",
@@ -1044,15 +1060,19 @@ def _render_timeline(frame_results: list[dict]) -> None:
     st.markdown(timeline_html, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  SHARED RENDERERS  (image pipeline helpers — unchanged)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _render_image_grid(uploaded, img: dict) -> None:
-    cards_html = image_grid_card(
-        get_image_base64(uploaded), "Original", "Imagen de entrada"
-    )
+    """
+    Render the Grad-CAM image grid for a single-frame inference result.
+
+    Shows the original image alongside Model A, Model B, and fusion
+    Grad-CAM cards. Displays an ONNX notice card when Grad-CAM is
+    unavailable (ONNX backend active).
+
+    Args:
+        uploaded: Streamlit UploadedFile for the original image.
+        img: Image analysis result dict from the diagnosis endpoint.
+    """
+    cards_html = image_grid_card(get_image_base64(uploaded), "Original", "Input Image")
 
     has_gradcam = bool(img.get("gradcam_fusion") or img.get("gradcam_a"))
 
@@ -1063,26 +1083,26 @@ def _render_image_grid(uploaded, img: dict) -> None:
         if img.get("gradcam_a"):
             cards_html += image_grid_card(
                 img["gradcam_a"],
-                "Modelo A",
-                f"Atención Contexto ({alpha:.0%})",
+                "Model A",
+                f"Context Attention ({alpha:.0%})",
             )
         else:
-            cards_html += _placeholder_card("Modelo A", "No disponible")
+            cards_html += _placeholder_card("Model A", "Not available")
 
         if img.get("gradcam_b"):
             cards_html += image_grid_card(
                 img["gradcam_b"],
-                "Modelo B",
-                f"Atención Tejido ({beta:.0%})",
+                "Model B",
+                f"Tissue Attention ({beta:.0%})",
             )
         else:
-            cards_html += _placeholder_card("Modelo B", "No disponible")
+            cards_html += _placeholder_card("Model B", "Not available")
 
         if img.get("gradcam_fusion"):
             cards_html += image_grid_card(
                 img["gradcam_fusion"],
-                "Fusión Ensemble",
-                "Decisión Final",
+                "Ensemble Fusion",
+                "Final Decision",
                 special=True,
             )
     else:
@@ -1097,10 +1117,22 @@ def _render_detail_expander(
     score: float,
     probs: dict,
 ) -> None:
-    with st.expander("📊 Detalle de Confianza del Modelo", expanded=False):
+    """
+    Render the collapsible model confidence detail expander.
+
+    Displays predicted class, confidence, ensemble weights, probability
+    distribution bars, and backend / Grad-CAM availability info.
+
+    Args:
+        img: Full image analysis dict from the diagnosis endpoint.
+        cls: Predicted class string (e.g. ``"polyp"``).
+        score: Prediction confidence in [0, 1].
+        probs: Dict mapping class names to their probabilities.
+    """
+    with st.expander("📊 Model Confidence Detail", expanded=False):
         c1, c2, c3 = st.columns(3)
-        c1.metric("Clase Predicha", cls.title())
-        c2.metric("Confianza", f"{score:.1%}")
+        c1.metric("Predicted Class", cls.title())
+        c2.metric("Confidence", f"{score:.1%}")
         c3.metric(
             "Ensemble Weights",
             f"α={img.get('alpha_used', 0):.2f} / β={img.get('beta_used', 0):.2f}",
@@ -1111,7 +1143,7 @@ def _render_detail_expander(
         if probs:
             st.markdown(
                 "<p style='font-weight:600; margin-bottom:0.5rem;'>"
-                "📈 Distribución de probabilidades</p>",
+                "📈 Probability distribution</p>",
                 unsafe_allow_html=True,
             )
             sorted_probs = sorted(probs.items(), key=lambda x: x[1], reverse=True)
@@ -1164,8 +1196,8 @@ def _render_detail_expander(
                 <div style="background:#f8f9fa; border-radius:8px;
                             padding:0.75rem 1rem; font-size:0.85rem;">
                     <b>Backend:</b> {"⚡ ONNX Runtime" if backend == "onnx" else "🔥 PyTorch"}<br>
-                    <b>Ensemble:</b> {"✅ Activo" if img.get("ensemble_used") else "❌ Solo Modelo A"}<br>
-                    <b>Grad-CAM:</b> {"✅ Disponible" if has_gradcam else "⚠️ No disponible (ONNX)"}
+                    <b>Ensemble:</b> {"✅ Active" if img.get("ensemble_used") else "❌ Model A only"}<br>
+                    <b>Grad-CAM:</b> {"✅ Available" if has_gradcam else "⚠️ Not available (ONNX)"}
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1177,25 +1209,30 @@ def _render_detail_expander(
                 <div style="background:#f8f9fa; border-radius:8px;
                             padding:0.75rem 1rem; font-size:0.85rem;">
                     <b>Attention Ratio:</b> {f"{attention:.3f}" if attention else "N/A (ONNX)"}<br>
-                    <b>α (Modelo A):</b> {img.get("alpha_used", 0):.3f}<br>
-                    <b>β (Modelo B):</b> {img.get("beta_used", 0):.3f}
+                    <b>α (Model A):</b> {img.get("alpha_used", 0):.3f}<br>
+                    <b>β (Model B):</b> {img.get("beta_used", 0):.3f}
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
         st.info(
-            "ℹ️ Los pesos del ensemble se adaptan dinámicamente según la entropía "
-            "de cada modelo para cada imagen individual."
+            "ℹ️ Ensemble weights are dynamically adapted based on each "
+            "model's entropy for every individual image."
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  HTML HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _loader_html(primary: str, secondary: str) -> str:
+    """
+    Generate the HTML markup for the animated loading overlay.
+
+    Args:
+        primary: Main loading message displayed in large text.
+        secondary: Subtitle displayed beneath the primary message.
+
+    Returns:
+        HTML string containing the loader container markup.
+    """
     return f"""
     <div class="loader-container">
         <div class="loader-spinner">&#8203;</div>
@@ -1206,6 +1243,16 @@ def _loader_html(primary: str, secondary: str) -> str:
 
 
 def _placeholder_card(title: str, subtitle: str) -> str:
+    """
+    Generate an HTML placeholder card for unavailable Grad-CAM outputs.
+
+    Args:
+        title: Card title displayed in bold (e.g. ``"Model A"``).
+        subtitle: Secondary line displayed below the title.
+
+    Returns:
+        HTML string for a dashed-border placeholder card.
+    """
     return f"""
     <div style="
         background:#f8f9fa; border:2px dashed #dee2e6; border-radius:12px;
@@ -1221,6 +1268,15 @@ def _placeholder_card(title: str, subtitle: str) -> str:
 
 
 def _onnx_notice_card() -> str:
+    """
+    Generate an HTML notice card indicating that ONNX Runtime is active.
+
+    Informs the user that Grad-CAM maps are unavailable when the ONNX
+    backend is used, while classification and segmentation remain equivalent.
+
+    Returns:
+        HTML string for the full-width ONNX notice card.
+    """
     return """
     <div style="
         grid-column:span 3;
@@ -1230,45 +1286,82 @@ def _onnx_notice_card() -> str:
     ">
         <div style="font-size:1.5rem; margin-bottom:0.5rem;">⚡</div>
         <div style="font-weight:600; font-size:0.95rem; margin-bottom:0.4rem;">
-            Backend ONNX Runtime activo
+            ONNX Runtime backend active
         </div>
         <div style="font-size:0.85rem; opacity:0.85;">
-            La inferencia ONNX no genera mapas Grad-CAM (requiere backend PyTorch).
-            La clasificación y segmentación son equivalentes.
+            ONNX inference does not generate Grad-CAM maps (requires PyTorch backend).
+            Classification and segmentation are equivalent.
         </div>
     </div>
     """
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  HELPERS — file-like wrapper for extracted frames
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 class _FrameFile:
     """
-    Minimal file-like object that mimics a Streamlit UploadedFile
-    so es compatible con ``upload_colonoscopy_image``.
+    Minimal file-like wrapper that mimics a Streamlit UploadedFile.
+
+    Used to pass extracted video frames to ``upload_colonoscopy_image``
+    without re-wrapping them as real uploaded files.
+
+    Attributes:
+        name: Filename string used by the upload endpoint.
+        type: MIME type string (always ``"image/jpeg"``).
     """
 
     def __init__(self, data: bytes, name: str) -> None:
+        """
+        Initialise the frame file wrapper.
+
+        Args:
+            data: Raw JPEG bytes of the extracted frame.
+            name: Filename to report to the upload endpoint.
+        """
         self._data = data
         self._buf = io.BytesIO(data)
         self.name = name
         self.type = "image/jpeg"
 
     def read(self, size: int = -1) -> bytes:
+        """
+        Read up to ``size`` bytes from the internal buffer.
+
+        Args:
+            size: Maximum number of bytes to read. ``-1`` reads all.
+
+        Returns:
+            Bytes read from the buffer.
+        """
         return self._buf.read(size)
 
     def seek(self, pos: int) -> int:
+        """
+        Seek to the given position in the internal buffer.
+
+        Args:
+            pos: Byte offset from the start of the buffer.
+
+        Returns:
+            New absolute position in the buffer.
+        """
         return self._buf.seek(pos)
 
     def tell(self) -> int:
+        """
+        Return the current position of the internal buffer pointer.
+
+        Returns:
+            Current byte offset from the start of the buffer.
+        """
         return self._buf.tell()
 
     def getvalue(self) -> bytes:
+        """
+        Return the full raw byte content regardless of the buffer position.
+
+        Returns:
+            Complete JPEG byte string of the frame.
+        """
         return self._data
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 render()

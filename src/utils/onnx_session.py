@@ -1,8 +1,5 @@
 """
-src/utils/onnx_session.py
-
-Wrapper sobre onnxruntime.InferenceSession para uso en el engine
-y cualquier otro módulo que necesite inferencia ONNX.
+Wrapper for ONNX Runtime.
 """
 
 from pathlib import Path
@@ -15,17 +12,17 @@ from src.config.logger import log as logger
 
 class ONNXSession:
     """
-    Wrapper ligero sobre ``onnxruntime.InferenceSession``.
+    Wrapper light over ONNX Runtime
 
-    Características:
-      - **Lazy init**: la sesión no se crea hasta la primera llamada a ``run()``.
-      - **Provider auto-selección**: CUDA si disponible y solicitado, CPU como fallback.
-      - **Interface uniforme**: ``run()`` y ``run_all()`` aceptan arrays numpy.
+    Characteristics:
+      - **Lazy init**: the session is not created until the first call to ``run()``.
+      - **Provider auto-selection**: CUDA if available and requested, CPU as fallback.
+      - **Uniform interface**: ``run()`` and ``run_all()`` accept numpy arrays.
 
     Args:
-        onnx_path: ruta al archivo ``.onnx``.
-        device:    ``"cuda"`` o ``"cpu"``. Si se pide CUDA pero no está disponible
-                   en el runtime, se usa CPU automáticamente sin error.
+        onnx_path: path to the ``.onnx`` file.
+        device:    ``"cuda"`` or ``"cpu"``. If CUDA is requested but not available
+                   in the runtime, CPU will be used automatically without error.
     """
 
     def __init__(self, onnx_path: Path, device: str = "cpu"):
@@ -35,18 +32,18 @@ class ONNXSession:
 
     @property
     def available(self) -> bool:
-        """``True`` si el archivo ``.onnx`` existe en disco."""
+        """``True`` if the ``.onnx`` file exists on disk."""
         return self.path.exists()
 
     def _get(self) -> ort.InferenceSession:
         """
-        Inicializa la sesión en el primer acceso (lazy init).
+        Initializes the session on the first access (lazy init).
 
         Returns:
-            Sesión ONNX Runtime lista para inferencia.
+            ONNX Runtime session ready for inference.
 
         Raises:
-            RuntimeError: si el archivo no existe o la sesión no se puede crear.
+            RuntimeError: if the file does not exist or the session cannot be created.
         """
         if self._sess is None:
             providers = self._select_providers()
@@ -67,10 +64,10 @@ class ONNXSession:
 
     def _select_providers(self) -> list[str]:
         """
-        Selecciona providers disponibles según el device solicitado.
+        Selects available providers based on the requested device.
 
         Returns:
-            Lista de providers en orden de preferencia.
+            List of providers in order of preference.
         """
         available = ort.get_available_providers()
         if self.device == "cuda" and "CUDAExecutionProvider" in available:
@@ -79,17 +76,17 @@ class ONNXSession:
 
     def run(self, input_np: np.ndarray) -> np.ndarray:
         """
-        Ejecuta inferencia y devuelve el primer output.
+        Executes inference and returns the first output.
 
         Args:
             input_np: array float32.
-                      Para modelos de imagen: shape ``(B, 3, H, W)``.
-                      Para modelos tabulares: shape ``(B, N_features)``.
+                      For image models: shape ``(B, 3, H, W)``.
+                      For tabular models: shape ``(B, N_features)``.
 
         Returns:
             Primer output del modelo, shape dependiente de la arquitectura.
-            Para clasificadores: ``(B, num_classes)`` logits.
-            Para segmentadores: ``(B, 1, H, W)`` logits.
+            For classifiers: ``(B, num_classes)`` logits.
+            For segmenters: ``(B, 1, H, W)`` logits.
         """
         sess = self._get()
         input_name = sess.get_inputs()[0].name
@@ -97,17 +94,17 @@ class ONNXSession:
 
     def run_all(self, input_np: np.ndarray) -> list[np.ndarray]:
         """
-        Ejecuta inferencia y devuelve todos los outputs.
+        Executes inference and returns all outputs.
 
-        Útil para modelos ONNX-ML (sklearn/xgboost) que producen
-        múltiples salidas: ``[labels, probabilities]``.
+        Useful for ONNX-ML models (sklearn/xgboost) that produce
+        múltiple exits.
 
         Args:
             input_np: array float32, shape ``(B, N_features)``.
 
         Returns:
-            Lista de arrays, uno por output del modelo.
-            Típicamente ``[labels_array, probas_array]``.
+            Arraylist, one for output of the model.
+            Tipically ``[labels_array, probas_array]``.
         """
         sess = self._get()
         input_name = sess.get_inputs()[0].name

@@ -1,7 +1,5 @@
 """
-src/utils/ml_utils.py
-
-Utilidades de ml reutilizables
+Utility functions for machine learning tasks.
 """
 
 import base64
@@ -9,82 +7,13 @@ import base64
 import cv2
 import numpy as np
 
-from src.config.constants import CLINICAL_DEFAULTS
-from src.config.logger import log as logger
-
-_CATEGORICAL_ENCODINGS: dict[str, dict[str, int]] = {
-    "gender": {
-        "male": 0,
-        "m": 0,
-        "masculino": 0,
-        "female": 1,
-        "f": 1,
-        "femenino": 1,
-    },
-    "smoking_status": {
-        "never": 0,
-        "nunca": 0,
-        "former": 1,
-        "exfumador": 1,
-        "current": 2,
-        "fumador": 2,
-    },
-    "alcohol_consumption": {
-        "none": 0,
-        "ninguno": 0,
-        "moderate": 1,
-        "moderado": 1,
-        "heavy": 2,
-        "alto": 2,
-    },
-    "physical_activity": {
-        "sedentary": 0,
-        "sedentario": 0,
-        "low": 1,
-        "bajo": 1,
-        "moderate": 2,
-        "moderado": 2,
-        "high": 3,
-        "alto": 3,
-    },
-    "diet_type": {
-        "western": 0,
-        "occidental": 0,
-        "mediterranean": 1,
-        "mediterranea": 1,
-        "vegetarian": 2,
-        "vegetariana": 2,
-    },
-    "ethnicity": {
-        "caucasian": 0,
-        "caucasico": 0,
-        "hispanic": 1,
-        "hispanico": 1,
-        "african": 2,
-        "africano": 2,
-        "asian": 3,
-        "asiatico": 3,
-        "other": 4,
-        "otro": 4,
-    },
-}
-
-_BOOLEAN_FEATURES: frozenset[str] = frozenset(
-    {
-        "family_history_ccr",
-        "family_history_polyps",
-        "family_history_lynch",
-        "family_history_fap",
-        "has_ibd",
-        "has_diabetes_t2",
-        "previous_polyps",
-        "previous_cancer",
-        "fobt_positive",
-        "fit_positive",
-    }
+from src.config.constants import (
+    BOOL_TRUE_STRINGS as _BOOL_TRUE_STRINGS,
+    BOOLEAN_FEATURES as _BOOLEAN_FEATURES,
+    CATEGORICAL_ENCODINGS as _CATEGORICAL_ENCODINGS,
+    CLINICAL_DEFAULTS,
 )
-
-_BOOL_TRUE_STRINGS = frozenset({"yes", "true", "1", "sí", "si"})
+from src.config.logger import log as logger
 
 
 def encode_patient_row(
@@ -92,28 +21,27 @@ def encode_patient_row(
     feature_names: list[str],
 ) -> np.ndarray:
     """
-    Convierte un dict de datos clínicos a un vector float32 para ONNX-ML.
+    Converts a dict of clinical data to a float32 vector for ONNX-ML.
 
-    Maneja tres tipos de features:
-      - **Booleanas**: ``bool``, ``int`` o strings como ``"yes"``/``"no"`` → 0.0 / 1.0
-      - **Categóricas**: strings mapeados a int via ``_CATEGORICAL_ENCODINGS``
-      - **Numéricas**: conversión directa a ``float``
+    Handles three types of features:
+      - **Boolean**: ``bool``, ``int`` or strings like ``"yes"``/``"no"`` → 0.0 / 1.0
+      - **Categorical**: strings mapped to integers via ``_CATEGORICAL_ENCODINGS``
+      - **Numerical**: direct conversion to ``float``
 
-    Los valores ``None`` o ausentes se rellenan desde ``CLINICAL_DEFAULTS`` o con 0.
+    Missing or ``None`` values are filled from ``CLINICAL_DEFAULTS`` or with 0.
 
     Args:
-        patient_data:  dict con los valores del paciente, clave = nombre de feature.
-        feature_names: lista ordenada de nombres de features tal como espera el modelo.
+        patient_data:  dict with the patient's values, key = feature name.
+        feature_names: ordered list of feature names as expected by the model.
 
     Returns:
-        Array numpy de shape ``(1, len(feature_names))`` y dtype ``float32``.
+        Array numpy of shape ``(1, len(feature_names))`` and dtype ``float32``.
     """
     row: list[float] = []
 
     for feat in feature_names:
         raw = patient_data.get(feat)
 
-        # None explícito o clave ausente → usar default
         if raw is None:
             raw = CLINICAL_DEFAULTS.get(feat, 0)
             logger.debug(f"  Feature '{feat}' es None → default={raw}")
@@ -125,20 +53,20 @@ def encode_patient_row(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Helpers internos
+#  Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def _convert_feature(feat: str, raw) -> float:
     """
-    Convierte un único valor de feature a float.
+    Converts a single feature value to float.
 
     Args:
-        feat: nombre de la feature.
-        raw:  valor crudo (str, bool, int, float). Nunca None (ya resuelto upstream).
+        feat: name of the feature.
+        raw:  raw value (str, bool, int, float). Never None (already resolved upstream).
 
     Returns:
-        Valor numérico como float.
+        Numeric value as float.
     """
     if feat in _BOOLEAN_FEATURES:
         return _to_bool_float(raw)
@@ -148,7 +76,7 @@ def _convert_feature(feat: str, raw) -> float:
 
 
 def _to_bool_float(raw) -> float:
-    """Convierte un valor booleano/string a 0.0 o 1.0."""
+    """Converts a boolean/string value to 0.0 or 1.0."""
     if raw is None:
         return 0.0
     if isinstance(raw, bool):
@@ -162,7 +90,7 @@ def _to_bool_float(raw) -> float:
 
 
 def _to_categorical_float(feat: str, raw) -> float:
-    """Convierte un string categórico a su código numérico."""
+    """Converts a categorical string to its numeric code."""
     if raw is None:
         return 0.0
     if isinstance(raw, str):
@@ -179,7 +107,7 @@ def _to_categorical_float(feat: str, raw) -> float:
 
 
 def _to_numeric_float(feat: str, raw) -> float:
-    """Convierte un valor numérico a float, con aviso si falla."""
+    """Converts a numerical value to float, with warning if it fails."""
     if raw is None:
         return 0.0
     try:
@@ -191,14 +119,14 @@ def _to_numeric_float(feat: str, raw) -> float:
 
 def numpy_to_base64(img_rgb: np.ndarray) -> str:
     """
-    Convierte una imagen RGB numpy a data URI base64 PNG.
+    Converts a numpy RGB image to a base64 data URI PNG.
 
     Args:
-        img_rgb: imagen en formato RGB, shape (H, W, 3), dtype uint8.
+        img_rgb: image in RGB format, shape (H, W, 3), dtype uint8.
 
     Returns:
-        String con formato ``data:image/png;base64,<datos>``,
-        listo para usar en HTML o como src de una imagen.
+        String with format ``data:image/png;base64,<datos>``,
+        ready to use in HTML or as src of an image.
     """
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
     _, buf = cv2.imencode(".png", img_bgr)
@@ -207,17 +135,14 @@ def numpy_to_base64(img_rgb: np.ndarray) -> str:
 
 def softmax_np(x: np.ndarray) -> np.ndarray:
     """
-    Softmax numéricamente estable sobre un vector 1D.
-
-    Resta el máximo antes de exponenciar para evitar overflow,
-    lo que es equivalente matemáticamente pero más estable.
+    Softmax stable implementation over a vector 1D.
 
     Args:
-        x: vector de logits 1D, shape (C,).
+        x: vector of logits 1D, shape (C,).
 
     Returns:
-        Vector de probabilidades de la misma shape que ``x``,
-        con valores en (0, 1) que suman 1.
+        Vector of probabilities of the same shape as ``x``,
+        with values in (0, 1) that sum to 1.
     """
     e = np.exp(x - np.max(x))
     return e / e.sum()

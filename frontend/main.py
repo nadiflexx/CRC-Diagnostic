@@ -52,7 +52,7 @@ def main() -> None:
     st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("Explore Modules")
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
 
     with c1:
         st.markdown(
@@ -64,45 +64,55 @@ def main() -> None:
             ),
             unsafe_allow_html=True,
         )
-        st.page_link("pages/01_pacientes.py", label="Open Patient Records", icon="📋")
+        st.page_link("pages/01_Patients.py", label="Open Patient Records", icon="📋")
 
     with c2:
         st.markdown(
             module_card(
-                "🧬",
-                "Diagnóstico Tumoral",
-                "Análisis predictivo CRC: biomarcadores hematológicos + "
-                "features radiómicas (XGBoost · SHAP · NCCN 2023).",
+                "🫁",
+                "Smoking Triage",
+                "Indirect detection of smoking habit using clinical biomarkers. "
+                "Prioritization of endoscopic screening without direct patient questioning.",
             ),
             unsafe_allow_html=True,
         )
         st.page_link(
-            "pages/02_tumor_diagnostico.py",
-            label="Ejecutar Diagnóstico Tumoral",
-            icon="🧬",
+            "pages/02_Smoking_triage.py",
+            label="Execute Smoking Triage",
+            icon="🫁",
         )
 
     with c3:
         st.markdown(
             module_card(
-                "🔬",
-                "Endoscopy AI",
-                "Deep learning classification, Grad-CAM explainability, "
-                "and U-Net segmentation.",
+                "🧬",
+                "Oncological Diagnosis CRC",
+                "Predictive analysis of CRC: hematological biomarkers + "
+                "radiomic features (XGBoost · SHAP · NCCN 2023).",
             ),
             unsafe_allow_html=True,
         )
-        st.page_link("pages/03_endoscopia.py", label="Launch Inference", icon="🧠")
+        st.page_link(
+            "pages/03_Tumoral_diagnostic.py",
+            label="Execute Oncological Diagnosis",
+            icon="🧬",
+        )
 
-    st.markdown(
-        """
-        <div style="text-align:center; color:#9dceca; font-size:0.78rem;
-             padding:3rem 0 1rem; border-top:1px solid #d4eceb; margin-top:3rem;">
-            Endo-AID Clinical Suite · v2.0 · For Research & Educational Use Only
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    with c4:
+        st.markdown(
+            module_card(
+                "🔬",
+                "Endoscopic AI Analysis",
+                "Deep learning classification, Grad-CAM explainability "
+                "and U-Net polyp segmentation.",
+            ),
+            unsafe_allow_html=True,
+        )
+        st.page_link(
+            "pages/04_Endoscopy_analyzer.py",
+            label="Execute Endoscopic AI Analysis",
+            icon="🔬",
+        )
 
 
 if __name__ == "__main__":

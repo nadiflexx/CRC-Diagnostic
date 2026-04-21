@@ -1,4 +1,3 @@
-# frontend/utils/video_processor.py
 """
 Video processor utility for endoscopy video frame extraction.
 Extracts frames every N seconds and returns them as PIL Images.

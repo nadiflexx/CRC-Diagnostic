@@ -71,7 +71,7 @@ class ModelSettings(BaseSettings):
 class DiagnosisSettings(BaseSettings):
     """Diagnosis decision thresholds."""
 
-    # Main classification threshold (low to minimize false negatives)
+    # Main classification threshold
     CANCER_THRESHOLD: float = 0.3
 
     # Risk level thresholds
@@ -82,7 +82,7 @@ class DiagnosisSettings(BaseSettings):
     # Minimum recall target
     MIN_RECALL_TARGET: float = 0.95
 
-    # Multimodal fusion weights (default, can be learned)
+    # Multimodal fusion weights
     FUSION_IMAGE_WEIGHT: float = 0.6
     FUSION_TABULAR_WEIGHT: float = 0.4
 

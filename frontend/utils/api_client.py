@@ -50,7 +50,6 @@ def upload_colonoscopy_image(patient_id: int, file) -> dict | None:
         - _FrameFile wrapper (has .getvalue() and .name)
     """
     try:
-        # ── Obtener bytes ──────────────────────────────────────────────
         if hasattr(file, "getvalue"):
             file_bytes = file.getvalue()
         elif hasattr(file, "read"):
@@ -96,6 +95,20 @@ def create_patient(patient_data: dict) -> dict | None:
             return resp.json()
         st.error(f"❌ Error del servidor: {resp.text}")
         return None
+    except requests.ConnectionError:
+        st.error("⚠️ No se pudo conectar con el servidor.")
+        return None
+
+
+def run_smoking_triage(payload: dict) -> dict | None:
+    """Runs the smoking habit triage model via reverse logic."""
+    try:
+        resp = requests.post(
+            f"{API_BASE_URL}/diagnosis/smoking-triage",
+            json=payload,
+            timeout=30,
+        )
+        return _handle_response(resp)
     except requests.ConnectionError:
         st.error("⚠️ No se pudo conectar con el servidor.")
         return None

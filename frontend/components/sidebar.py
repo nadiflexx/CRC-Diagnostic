@@ -36,7 +36,7 @@ def render_sidebar() -> None:
             <div class="sidebar-footer">
                 <div class="sidebar-footer-label">Signed in as</div>
                 <div class="sidebar-footer-name">Dr. Usuario Local</div>
-                <div class="sidebar-footer-role">Oncología Digestiva</div>
+                <div class="sidebar-footer-role">Digestive Oncology Specialist</div>
             </div>
             """,
             unsafe_allow_html=True,

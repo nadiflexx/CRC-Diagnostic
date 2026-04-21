@@ -53,6 +53,8 @@ data/colon_clean/*
 data/colon_processed/*
 data/colon_processed_tissue_only/*
 data/tabular_processed/*
+data/analysis/*
+
 # Keep the folder structure, just ignore content
 !data/raw/.gitkeep
 !data/processed/.gitkeep
@@ -64,6 +66,7 @@ logs/*.log
 # Ignore ML Models (Binaries are large)
 models/*.pkl
 models/*.joblib
+modeles/*
 
 # ============================================
 #  IDE & TOOLS

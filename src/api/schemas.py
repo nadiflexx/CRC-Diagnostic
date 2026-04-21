@@ -130,3 +130,30 @@ class DiagnosisResponse(BaseModel):
     tabular_analysis: dict | None = None
     multimodal_result: dict | None = None
     history_analysis: dict | None = None
+
+
+class SmokingTriageRequest(BaseModel):
+    sex: int = Field(..., ge=0, le=1, description="0=Femenino · 1=Masculino")
+    age: float = Field(..., ge=18, le=120)
+    height: float = Field(..., ge=100, le=250, description="cm")
+    weight: float = Field(..., ge=30, le=200, description="kg")
+    BMI: float = Field(..., ge=10, le=60)
+    waistline: float = Field(..., ge=40, le=180, description="cm")
+    triglyceride: float = Field(..., ge=20, le=1000, description="mg/dL")
+    HDL_chole: float = Field(..., ge=5, le=200, description="mg/dL")
+    LDL_chole: float = Field(..., ge=10, le=400, description="mg/dL")
+    hemoglobin: float = Field(..., ge=4, le=25, description="g/dL")
+    waist_height_ratio: float = Field(0.0, ge=0.0, le=2.0)
+    hemoglobin_per_height: float = Field(0.0, ge=0.0, le=1.0)
+
+
+class SmokingTriageResponse(BaseModel):
+    smoking_probability: float
+    non_smoking_probability: float
+    predicted_smoker: bool
+    risk_level: str
+    risk_color: str
+    confidence: str
+    backend: str
+    top_indicators: list[dict]
+    recommendation: str

@@ -13,7 +13,6 @@ def apply_custom_css() -> None:
     css_path = Path(__file__).parent.parent / "assets" / "styles.css"
     if css_path.exists():
         css_content = css_path.read_text(encoding="utf-8")
-        # Force cache busting with timestamp
         cache_buster = int(css_path.stat().st_mtime * 1000)
         st.markdown(
             f"<style>/* v{cache_buster} */{css_content}</style>",
@@ -24,7 +23,6 @@ def apply_custom_css() -> None:
 def get_image_base64(uploaded_file) -> str:
     """Converts a Streamlit UploadedFile to a base64 data URI."""
     b64 = base64.b64encode(uploaded_file.getvalue()).decode()
-    # Detect MIME type based on file extension
     mime_type = "image/jpeg"
     if uploaded_file.name.lower().endswith((".png", ".png")):
         mime_type = "image/png"

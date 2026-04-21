@@ -93,18 +93,15 @@ def _generate_features(df_base: pd.DataFrame, rng: np.random.Generator) -> pd.Da
     cancer_idx = np.where(diag == 1)[0]
     n_c = len(cancer_idx)
 
-    # Arrays for stage-aware derived radiomic features (cancer only)
     hom_base_c = np.zeros(n_c)
     sph_mu_c = np.zeros(n_c)
     skew_mu_c = np.zeros(n_c)
 
     if n_c > 0:
-        # Correlated standard residuals: preserve CANCER_CORR structure per stage.
         L_cancer = np.linalg.cholesky(CANCER_CORR)
         z_c = rng.standard_normal((n_c, 5))
-        corr_res_c = z_c @ L_cancer.T  # (n_c, 5), mean≈0, std≈1 per column
+        corr_res_c = z_c @ L_cancer.T
 
-        # Staging: 18% T1 · 27% T2 · 30% T3 · 25% T4/M1
         stages = rng.choice([1, 2, 3, 4], size=n_c, p=[0.18, 0.27, 0.30, 0.25])
 
         for stage, (means_s, stds_s, hom_b, sph_m, skew_m) in STAGE_PARAMS.items():
@@ -131,8 +128,6 @@ def _generate_features(df_base: pd.DataFrame, rng: np.random.Generator) -> pd.Da
     healthy_idx = np.where(diag == 0)[0]
     n_h = len(healthy_idx)
     if n_h > 0:
-        # Smoking, IBD and genetic mutations raise baseline CEA in healthy
-        # subjects (Duffy et al. 2021).
         cea_log_base = (
             HEALTHY_MEANS[0]
             + 0.85 * smoking[healthy_idx]
@@ -150,13 +145,6 @@ def _generate_features(df_base: pd.DataFrame, rng: np.random.Generator) -> pd.Da
         entropy[healthy_idx] = samples_h[:, 3]
         contrast[healthy_idx] = samples_h[:, 4]
 
-    # ── Derived radiomic features ─────────────────────────────────────────────
-    # ADC_Std: lognormal independent of ADC level; covers real inter-equipment
-    # ranges.
-    # Tumour (median ~200 µm²/s, p5~68, p95~480 → clipped): necrosis and
-    # intra-tumour hypoxia.
-    # Healthy (median ~82 µm²/s, p5~30, p95~195): uniform tissue, minimal
-    # dispersion.
     adc_std = np.where(
         diag == 1,
         np.clip(rng.lognormal(np.log(200), 0.55, n), 5.0, 400.0),
@@ -183,7 +171,6 @@ def _generate_features(df_base: pd.DataFrame, rng: np.random.Generator) -> pd.Da
     sph_raw = rng.normal(sph_mu_full, 0.12, n)
 
     # Skewness: T1(mild)→T4(extreme due to massive necrosis) gradient;
-    # ~0 for healthy.
     skew_mu_full = np.full(n, 0.05)
     skew_mu_full[cancer_idx] = skew_mu_c
     skew_raw = rng.normal(skew_mu_full, 0.42, n)
@@ -207,14 +194,6 @@ def _generate_features(df_base: pd.DataFrame, rng: np.random.Generator) -> pd.Da
     )
 
     # ── Biological noise — clinical grey zone ─────────────────────────────────
-    # T1 early stage is modelled explicitly in the staging block above (18% of
-    # cancer group): not overwritten here.
-
-    # Severe multi-feature inflammation (~14% healthy): active IBD,
-    # diverticulitis or appendicitis raises CEA, lowers Hgb and restricts
-    # ADC simultaneously (ESGAR 2022). Affecting MULTIPLE features at once
-    # creates genuinely ambiguous cases the model cannot resolve with
-    # certainty → probabilities 25-55%.
     h_idx = df_out.index[df_out["Diagnosis"] == 0].to_numpy()
     n_inflam = max(1, int(len(h_idx) * 0.14))
     inflam_idx = rng.choice(h_idx, size=n_inflam, replace=False)
@@ -247,8 +226,7 @@ def _generate_features(df_base: pd.DataFrame, rng: np.random.Generator) -> pd.Da
         0.35, 0.48, n_inflam
     ).round(4)
 
-    # Lab & imaging variability (18% healthy): equipment artefacts split
-    # across four artefact types.
+    # Lab & imaging variability (18% healthy)
     sanos_idx = df_out.index[df_out["Diagnosis"] == 0].to_numpy()
     n_noise = max(1, int(len(sanos_idx) * 0.18))
     noisy_idx = rng.choice(sanos_idx, size=n_noise, replace=False)

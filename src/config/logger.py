@@ -9,10 +9,8 @@ from loguru import logger
 
 from src.config.paths import paths
 
-# Remove default handler
 logger.remove()
 
-# ── Console handler — colorful, concise ──
 logger.add(
     sys.stderr,
     format=(
@@ -25,7 +23,6 @@ logger.add(
     colorize=True,
 )
 
-# ── File handler — detailed, persistent ──
 logger.add(
     paths.LOGS / "crc_diagnostic_{time:YYYY-MM-DD}.log",
     format=(
@@ -39,5 +36,4 @@ logger.add(
     encoding="utf-8",
 )
 
-# Export
 log = logger

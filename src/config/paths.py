@@ -15,7 +15,6 @@ class PathSettings(BaseSettings):
 
     ROOT: Path = _ROOT
 
-    # ── Data ──
     @property
     def DATA(self) -> Path:
         return self.ROOT / "data"
@@ -33,6 +32,10 @@ class PathSettings(BaseSettings):
         return self.RAW / "tabular_risk"
 
     @property
+    def RAW_TABULAR_SMOKE(self) -> Path:
+        return self.RAW / "tabular_smoke"
+
+    @property
     def PROCESSED(self) -> Path:
         return self.DATA / "processed"
 
@@ -40,7 +43,6 @@ class PathSettings(BaseSettings):
     def SYNTHETIC(self) -> Path:
         return self.DATA / "synthetic"
 
-    # ── Multi-source dataset dirs ──
     @property
     def COLON_CLEAN(self) -> Path:
         return self.DATA / "colon_clean"
@@ -50,8 +52,68 @@ class PathSettings(BaseSettings):
         return self.DATA / "colon_processed"
 
     @property
+    def ANALYSIS(self) -> Path:
+        return self.DATA / "analysis"
+
+    @property
+    def ANALYSIS_TABULAR_MODEL_DIR(self) -> Path:
+        return self.MODELS / "analysis_tabular"
+
+    @property
+    def ANALYSIS_COLON_LOGISTIC_MODEL_PATH(self) -> Path:
+        return self.ANALYSIS_TABULAR_MODEL_DIR / "logistic_regression_tabular.pkl"
+
+    @property
+    def ANALYSIS_COLON_COX_MODEL_PATH(self) -> Path:
+        return self.ANALYSIS_TABULAR_MODEL_DIR / "cox_model_tabular.pkl"
+
+    @property
+    def ANALYSIS_COLON_EVALUATION_DIR(self) -> Path:
+        return self.ANALYSIS / "colon_cancer_evaluation"
+
+    @property
+    def ANALYSIS_COLON_METADATA_PATH(self) -> Path:
+        return self.ANALYSIS_COLON_EVALUATION_DIR / "model_comparison_summary.csv"
+
+    @property
+    def RAW_TABULAR_CRC_DATASET(self) -> Path:
+        return self.RAW_TABULAR / "colorectal_cancer_dataset.csv"
+
+    @property
+    def ANALYSIS_TABULAR_XGB_MODEL_PATH(self) -> Path:
+        return self.ANALYSIS_TABULAR_MODEL_DIR / "xgboost_colon_analysis.pkl"
+
+    @property
+    def ANALYSIS_TABULAR_REPORT_DIR(self) -> Path:
+        return self.ANALYSIS / "analysis_tabular"
+
+    @property
+    def ANALYSIS_TABULAR_COUNTRY_SUMMARY_PATH(self) -> Path:
+        return self.ANALYSIS_TABULAR_REPORT_DIR / "country_risk_summary.csv"
+
+    @property
+    def REVERSE_LOGIC_MODEL_DIR(self) -> Path:
+        return self.MODELS / "reverse_logic"
+
+    @property
+    def REVERSE_LOGIC_SMOKING_MODEL_PATH(self) -> Path:
+        return self.REVERSE_LOGIC_MODEL_DIR / "reverse_logic_smoking_history.pkl"
+
+    @property
+    def REVERSE_LOGIC_ALCOHOL_MODEL_PATH(self) -> Path:
+        return self.REVERSE_LOGIC_MODEL_DIR / "reverse_logic_alcohol_consumption.pkl"
+
+    @property
+    def REVERSE_LOGIC_ANALYSIS_DIR(self) -> Path:
+        return self.ANALYSIS / "reverse_logic_tabular"
+
+    @property
     def TABULAR_PROCESSED(self) -> Path:
         return self.DATA / "tabular_processed"
+
+    @property
+    def TABULAR_SMOKE(self) -> Path:
+        return self.RAW / "tabular_smoke"
 
     @property
     def TABULAR_CLEAN(self) -> Path:
@@ -65,7 +127,6 @@ class PathSettings(BaseSettings):
     def HYPERKVASIR_RAW(self) -> Path:
         return self.RAW / "hyperkvasir_raw"
 
-    # ── Models ──
     @property
     def MODELS_ROOT(self) -> Path:
         return self.ROOT / "models"
@@ -74,12 +135,10 @@ class PathSettings(BaseSettings):
     def MODELS(self) -> Path:
         return self.ROOT / "models" / "saved"
 
-    # ── Logs ──
     @property
     def LOGS(self) -> Path:
         return self.ROOT / "logs"
 
-    # ── Uploads & Reports (API) ──
     @property
     def UPLOADS(self) -> Path:
         return self.DATA / "uploads"
@@ -121,7 +180,6 @@ class PathSettings(BaseSettings):
     def NOTEBOOKS(self) -> Path:
         return self.ROOT / "notebooks"
 
-    # ── Create all directories ──
     @model_validator(mode="after")
     def _create_dirs(self) -> "PathSettings":
         directories = [
@@ -131,7 +189,12 @@ class PathSettings(BaseSettings):
             self.HYPERKVASIR_RAW,
             self.MODELS,
             self.LOGS,
+            self.REVERSE_LOGIC_MODEL_DIR,
+            self.REVERSE_LOGIC_ANALYSIS_DIR,
             self.NOTEBOOKS,
+            self.ANALYSIS,
+            self.ANALYSIS_TABULAR_MODEL_DIR,
+            self.ANALYSIS_TABULAR_REPORT_DIR,
         ]
         for d in directories:
             d.mkdir(parents=True, exist_ok=True)

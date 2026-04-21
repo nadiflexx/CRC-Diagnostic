@@ -1,10 +1,10 @@
 """
 src/utils/export_onnx.py
 
-Exporta modelos .pth y .pkl a ONNX / ONNX-ML.
-Genera automáticamente un JSON de metadata junto a cada .onnx.
+Exports models from .pth y .pkl a ONNX / ONNX-ML.
+Generates automatically a JSON of metadata of each.onnx.
 
-Uso:
+Usage:
   uv run src/utils/export_onnx.py --all
   uv run src/utils/export_onnx.py --pth models/saved/best_classifier.pth
   uv run src/utils/export_onnx.py --pth models/saved/best_tissue_classifier.pth
@@ -42,7 +42,7 @@ MODEL_REGISTRY: dict[str, type] = {}
 
 
 def _build_registry():
-    """Registra todas las clases de modelos del proyecto."""
+    """Register all model classes from the project."""
     try:
         from src.models.image_classifier import ColonCancerClassifier
 
@@ -77,8 +77,7 @@ def _build_registry():
 
 class _TemperatureWrapper(nn.Module):
     """
-    Incorpora temperatura en el grafo ONNX.
-    Solo se aplica a clasificadores (salida logits 2D).
+    Wraps a model to apply temperature scaling to its outputs.
     """
 
     def __init__(self, model: nn.Module, temperature: float):
@@ -93,19 +92,20 @@ class _TemperatureWrapper(nn.Module):
         return self.model(x) / self.temperature
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  INSTANCIACIÓN ROBUSTA
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def _instantiate(cls: type, model_name: str, num_classes: int) -> nn.Module | None:
     """
-    Prueba firmas de constructor en orden hasta que una funcione.
+    Test constructor signatures in order until one works.
 
-      1. (model_name, pretrained=False, num_classes)  ← clasificadores timm
-      2. (pretrained=None)                             ← segmentadores smp
+      1. (model_name, pretrained=False, num_classes)  ← clasification timm
+      2. (pretrained=None)                             ← segmentation smp
       3. (pretrained=False)                            ← fallback
       4. ()                                            ← sin argumentos
+    Args:
+        cls (type): The model class to instantiate.
+        model_name (str): The name of the model.
+        num_classes (int): The number of classes for the model.
+    Returns:
+        nn.Module | None: The instantiated model or None if instantiation fails.
     """
     attempts = [
         {
@@ -117,8 +117,6 @@ def _instantiate(cls: type, model_name: str, num_classes: int) -> nn.Module | No
             "label": "model_name + pretrained=False + num_classes",
         },
         {
-            # smp: pretrained=None → arquitectura sin pesos, sin descarga
-            # pretrained=False falla porque smp busca pesos llamados "False"
             "kwargs": {"pretrained": None},
             "label": "pretrained=None  (smp / segmentadores)",
         },
@@ -144,23 +142,24 @@ def _instantiate(cls: type, model_name: str, num_classes: int) -> nn.Module | No
             continue
 
     print(
-        f"  ❌ No se pudo instanciar {cls.__name__}\n"
-        f"     Instancia manualmente y pasa model= a export_pth()"
+        f"  ❌ Cannot instantiate {cls.__name__}\n"
+        f"     Instantiate manually and pass model= to export_pth()"
     )
     return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  METADATA JSON  (novedad: se guarda para TODOS los .pth)
+#  METADATA JSON
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 def _save_pth_metadata(output_onnx: Path, ckpt: dict, pth_path: Path):
     """
-    Guarda metadata del checkpoint junto al .onnx.
-
-    El engine la usa para recuperar class_names, num_classes, etc.
-    sin necesidad de cargar PyTorch.
+    Save metadata of the checkpoint with each .onnx file.
+    Args:
+        output_onnx (Path): Path to the output ONNX file.
+        ckpt (dict): Checkpoint dictionary.
+        pth_path (Path): Path to the input PyTorch model file.
     """
     meta = {
         "source": pth_path.name,
@@ -175,7 +174,6 @@ def _save_pth_metadata(output_onnx: Path, ckpt: dict, pth_path: Path):
         "n_crops": ckpt.get("n_crops"),
         "crop_strategy": ckpt.get("crop_strategy"),
     }
-    # Eliminar claves None para JSON limpio
     meta = {k: v for k, v in meta.items() if v is not None}
 
     json_path = output_onnx.with_suffix(".json")
@@ -184,25 +182,20 @@ def _save_pth_metadata(output_onnx: Path, ckpt: dict, pth_path: Path):
     print(f"  💾 Metadata → {json_path.name}")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  INFERIR MODELO DESDE CHECKPOINT
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def _load_model_from_ckpt(pth_path: Path) -> tuple[nn.Module | None, dict]:
     """
-    Carga e instancia automáticamente el modelo desde un .pth.
-
+    Load and instantiate the model automatically from a .pth file.
+    Args:
+        pth_path (Path): Path to the input PyTorch model file.
     Returns:
-        (modelo_con_pesos, checkpoint_dict)
-        modelo es None si no se reconoce.
+        tuple[nn.Module | None, dict]: The instantiated model and the checkpoint dictionary.
     """
     _build_registry()
 
     ckpt = torch.load(pth_path, map_location="cpu", weights_only=False)
 
     if not isinstance(ckpt, dict):
-        print(f"  ❌ Checkpoint inesperado (no es dict): {type(ckpt)}")
+        print(f"  ❌ Checkpoint not expected (it's not a dict): {type(ckpt)}")
         return None, {}
 
     print(f"  Keys: {list(ckpt.keys())}")
@@ -217,49 +210,40 @@ def _load_model_from_ckpt(pth_path: Path) -> tuple[nn.Module | None, dict]:
     print(f"  num_classes: {num_classes}")
     print(f"  temperature: {temperature}")
 
-    # 1. Por model_type del checkpoint
     cls = MODEL_REGISTRY.get(model_type)
 
-    # 2. Por nombre del archivo
     if cls is None:
         stem = pth_path.stem.lower()
         for alias, klass in MODEL_REGISTRY.items():
             if alias.lower() in stem:
                 cls = klass
-                print(f"  💡 Inferido por nombre de archivo: {klass.__name__}")
+                print(f"  💡 Inferred by file name: {klass.__name__}")
                 break
 
     if cls is None:
         print(
-            f"  ❌ No se reconoce el modelo.\n"
-            f"     model_type='{model_type}', archivo='{pth_path.name}'\n"
-            f"     Aliases registrados: {list(MODEL_REGISTRY.keys())}\n"
-            f"     Añade tu clase en _build_registry()"
+            f"  ❌ Model not recognized.\n"
+            f"     model_type='{model_type}', file='{pth_path.name}'\n"
+            f"     Registered aliases: {list(MODEL_REGISTRY.keys())}\n"
+            f"     Add your class to _build_registry()"
         )
         return None, ckpt
 
-    # 3. Instanciar
     model = _instantiate(cls, model_name=model_name, num_classes=num_classes)
     if model is None:
         return None, ckpt
 
     model.load_state_dict(ckpt["model_state_dict"])
-    print(f"  ✅ {cls.__name__} cargado")
+    print(f"  ✅ {cls.__name__} loaded")
 
-    # Temperatura solo para clasificadores (no segmentadores)
     is_segmenter = (
         "segmenter" in pth_path.stem.lower() or "polyp" in pth_path.stem.lower()
     )
     if temperature != 1.0 and not is_segmenter:
         model = _TemperatureWrapper(model, temperature)
-        print(f"  🌡️  Temperatura {temperature:.3f} incorporada al grafo")
+        print(f"  🌡️  Temperature {temperature:.3f} incorporated into the graph")
 
     return model, ckpt
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  .pth → ONNX
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 def export_pth(
@@ -268,16 +252,16 @@ def export_pth(
     image_size: int = IMAGE_SIZE,
 ) -> Path | None:
     """
-    Exporta un .pth a ONNX + JSON de metadata.
+    Export a .pth file to ONNX + JSON metadata.
 
     Args:
-        pth_path:   ruta del .pth original
-        model:      modelo ya instanciado con pesos (opcional).
-                    Si es None se infiere automáticamente del checkpoint.
-        image_size: tamaño H=W de la imagen de entrada
+        pth_path:   path to the original .pth file
+        model:      instantiated model with weights (optional).
+                    If None, it will be inferred automatically from the checkpoint.
+        image_size: height and width of the input image
 
     Returns:
-        Path del .onnx generado o None si falla.
+        Path to the generated .onnx file or None if it fails.
     """
     pth_path = Path(pth_path)
     ONNX_DIR.mkdir(parents=True, exist_ok=True)
@@ -293,7 +277,6 @@ def export_pth(
         if model is None:
             return None
     else:
-        # Si se pasa el modelo manualmente, cargar ckpt solo para metadata
         try:
             ckpt = torch.load(pth_path, map_location="cpu", weights_only=False)
         except Exception:
@@ -306,7 +289,7 @@ def export_pth(
         try:
             ref_out = model(dummy).numpy()
         except Exception as e:
-            print(f"  ❌ Forward pass falló: {e}")
+            print(f"  ❌ Forward pass failed: {e}")
             return None
 
     print(f"  Input:  {tuple(dummy.shape)}")
@@ -326,18 +309,16 @@ def export_pth(
             verbose=False,
         )
     except Exception as e:
-        print(f"  ❌ Export falló: {e}")
+        print(f"  ❌ Export failed: {e}")
         return None
 
-    # Validar grafo
     try:
         onnx.checker.check_model(onnx.load(str(output)))
-        print("  ✅ Grafo ONNX válido")
+        print("  ✅ ONNX Graph valid")
     except Exception as e:
-        print(f"  ❌ Grafo inválido: {e}")
+        print(f"  ❌ Invalid ONNX Graph: {e}")
         return None
 
-    # Verificar outputs PyTorch vs ONNX Runtime
     try:
         sess = ort.InferenceSession(str(output), providers=["CPUExecutionProvider"])
         ort_out = sess.run(None, {"input": dummy.numpy()})[0]
@@ -345,9 +326,8 @@ def export_pth(
         status = "✅" if diff < 1e-3 else "⚠️ "
         print(f"  {status} PyTorch vs ONNX: max_diff={diff:.2e}")
     except Exception as e:
-        print(f"  ⚠️  Verificación: {e}")
+        print(f"  ⚠️  Verification failed: {e}")
 
-    # Guardar metadata JSON (siempre, para todos los .pth)
     if ckpt:
         _save_pth_metadata(output, ckpt, pth_path)
 
@@ -357,30 +337,26 @@ def export_pth(
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  .pkl → ONNX-ML
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def export_pkl(
     pkl_path: Path,
     n_features: int | None = None,
     feature_names: list[str] | None = None,
 ) -> Path | None:
     """
-    Exporta un .pkl (sklearn o xgboost) a ONNX-ML + JSON de metadata.
+    Export a .pkl file to ONNX-ML + JSON metadata.
 
-    El .pkl puede ser:
-      - Estimador sklearn/xgboost directamente
-      - Dict con clave 'model' (el resto va al JSON de metadata)
+    Supported formats:
+      - ReverseLogicTabularModel artifact  (dict with key 'pipelines')
+      - Generic project format      (dict with key 'model')
+      - Direct sklearn/xgboost estimator
 
     Args:
-        pkl_path:      ruta del .pkl
-        n_features:    features de entrada (se infiere si es None)
-        feature_names: nombres de features (van al JSON)
+        pkl_path:      path to the .pkl file
+        n_features:    input features (inferred if None)
+        feature_names: names of transformed features (go to JSON)
 
     Returns:
-        Path del .onnx generado o None si falla.
+        Path to the generated .onnx file or None if it fails.
     """
     pkl_path = Path(pkl_path)
     ONNX_DIR.mkdir(parents=True, exist_ok=True)
@@ -390,55 +366,105 @@ def export_pkl(
     print(f"  PKL → ONNX-ML: {pkl_path.name}")
     print(f"{'─' * 50}")
 
-    # Cargar
     try:
         with open(pkl_path, "rb") as f:
             obj = pickle.load(f)
     except Exception as e:
-        print(f"  ❌ Corrupto o ilegible: {e}")
+        print(f"  ❌ Corrupt or ilegible: {e}")
         return None
 
-    # Extraer modelo del dict envolvente
-    if isinstance(obj, dict) and "model" in obj:
-        model = obj["model"]
-        extra_meta = {k: v for k, v in obj.items() if k != "model"}
-        if feature_names is None and "feature_names" in obj:
-            feature_names = obj["feature_names"]
+    extra_meta: dict = {}
+    transformed_feature_names: list[str] = []
+
+    if isinstance(obj, dict):
+        if _is_reverse_logic_artifact(obj):
+            model, extra_meta, transformed_feature_names, inferred_n = (
+                _extract_reverse_logic_pipeline(obj)
+            )
+            if model is None:
+                return None
+            if n_features is None:
+                n_features = inferred_n
+            if feature_names is None and transformed_feature_names:
+                feature_names = transformed_feature_names
+
+        elif "model" in obj:
+            model = obj["model"]
+            extra_meta = {k: v for k, v in obj.items() if k != "model"}
+            if feature_names is None and "feature_names" in obj:
+                feature_names = obj["feature_names"]
+
+        else:
+            print(
+                f"  ❌ Dict with unrecognized keys.\n"
+                f"     Found keys : {list(obj.keys())}\n"
+                f"     Expected keys   : 'pipelines'  or  'model'"
+            )
+            return None
+
     else:
         model = obj
         extra_meta = {}
 
     module = type(model).__module__
     model_name = type(model).__name__
+    print(f"  Type:   {model_name}")
+    print(f"  MModule: {module}")
 
-    print(f"  Tipo:   {model_name}")
-    print(f"  Módulo: {module}")
-
-    # Inferir n_features
     if n_features is None:
         if feature_names:
             n_features = len(feature_names)
-        elif hasattr(model, "n_features_in_"):
-            n_features = int(model.n_features_in_)
         else:
-            print("  ❌ No se puede determinar n_features. Pasa --n-features N")
+            _preprocessor = None
+            if hasattr(model, "named_steps") and "preprocessor" in model.named_steps:
+                _preprocessor = model.named_steps["preprocessor"]
+            elif hasattr(model, "preprocessor_"):
+                _preprocessor = model.preprocessor_
+
+            if _preprocessor is not None and hasattr(_preprocessor, "n_features_in_"):
+                n_features = int(_preprocessor.n_features_in_)
+            elif hasattr(model, "n_features_in_"):
+                n_features = int(model.n_features_in_)
+
+        if n_features is None or not isinstance(n_features, int):
+            print(
+                "  ❌ Cannot determine n_features.\n"
+                "     Pass --n-features N with the number of input columns"
+            )
             return None
 
     print(f"  n_features: {n_features}")
 
-    # XGBoost → ONNX-ML
+    n_transformed: int = n_features
+
+    if transformed_feature_names:
+        n_transformed = len(transformed_feature_names)
+    else:
+        try:
+            _preprocessor = None
+            if hasattr(model, "named_steps") and "preprocessor" in model.named_steps:
+                _preprocessor = model.named_steps["preprocessor"]
+            elif hasattr(model, "preprocessor_"):
+                _preprocessor = model.preprocessor_
+
+            if _preprocessor is not None:
+                n_transformed = len(_preprocessor.get_feature_names_out())
+        except Exception:
+            pass
+
+    # ── XGBoost → ONNX-ML ────────────────────────────────────────────────────
     if "xgboost" in module:
         try:
             onnx_model = convert_xgboost(
                 model,
-                initial_types=[("input", XGBFloat([None, n_features]))],
+                initial_types=[("input", XGBFloat([None, n_transformed]))],
             )
             onnx.save(onnx_model, str(output))
         except Exception as e:
             print(f"  ❌ XGBoost export falló: {e}")
             return None
 
-    # sklearn → ONNX-ML
+    # ── sklearn Pipeline / estimator → ONNX-ML ───────────────────────────────
     elif "sklearn" in module:
         try:
             onnx_model = convert_sklearn(
@@ -452,9 +478,46 @@ def export_pkl(
             print(f"  ❌ sklearn export falló: {e}")
             return None
 
-    # No soportado
+    # ── LightGBM → ONNX-ML ───────────────────────────────────────────────────
+    elif "lightgbm" in module:
+        try:
+            onnx_model = convert_sklearn(
+                model,
+                initial_types=[("input", FloatTensorType([None, n_features]))],
+                target_opset=OPSET,
+            )
+            onnx.save(onnx_model, str(output))
+        except Exception as e:
+            print(f"  ❌ LightGBM export failed: {e}")
+            print(
+                "     Install: pip install onnxmltools lightgbm\n"
+                "     Or use --pipeline random_forest to export that pipeline"
+            )
+            return None
+
+    # ── FeatureWeightedXGBClassifier ───────────────────────────
+    elif hasattr(model, "model_") and hasattr(model, "preprocessor_"):
+        print(
+            "  💡 FeatureWeightedXGBClassifier detected → "
+            "exporting internal XGBClassifier"
+        )
+        try:
+            onnx_model = convert_xgboost(
+                model.model_,
+                initial_types=[("input", XGBFloat([None, n_transformed]))],
+            )
+            onnx.save(onnx_model, str(output))
+            extra_meta["note"] = (
+                "The preprocessing (StandardScaler + OHE) is NOT included in the graph. "
+                "Apply the ColumnTransformer manually before inference."
+            )
+        except Exception as e:
+            print(f"  ❌ FeatureWeightedXGBClassifier export failed: {e}")
+            return None
+
+    # ── No soportado ──────────────────────────────────────────────────────────
     else:
-        print(f"  ⚠️  {model_name} ({module}) no exportable a ONNX-ML")
+        print(f"  ⚠️  {model_name} ({module}) not exportable to ONNX-ML")
         if extra_meta:
             json_out = ONNX_DIR / pkl_path.with_suffix(".json").name
             with open(json_out, "w") as f:
@@ -462,7 +525,7 @@ def export_pkl(
             print(f"  💾 Metadata → {json_out.name}")
         return None
 
-    # Validar grafo
+    # ── Validar grafo ─────────────────────────────────────────────────────────
     try:
         onnx.checker.check_model(onnx.load(str(output)))
         print("  ✅ Grafo ONNX-ML válido")
@@ -470,21 +533,27 @@ def export_pkl(
         print(f"  ❌ Grafo inválido: {e}")
         return None
 
-    # Verificar outputs
+    # ── Verificar outputs sklearn vs ONNX Runtime ─────────────────────────────
     try:
-        X = np.random.randn(3, n_features).astype(np.float32)
-        ref = model.predict(X)
+        _n_verify = (
+            n_transformed
+            if (hasattr(model, "model_") and hasattr(model, "preprocessor_"))
+            else n_features
+        )
+        X_verify = np.random.randn(3, _n_verify).astype(np.float32)
+        ref = model.predict(X_verify)
         sess = ort.InferenceSession(str(output), providers=["CPUExecutionProvider"])
-        ort_pred = sess.run(None, {sess.get_inputs()[0].name: X})[0]
+        ort_pred = sess.run(None, {sess.get_inputs()[0].name: X_verify})[0]
         matches = int(np.sum(ref == ort_pred))
         print(f"  ✅ sklearn/xgb vs ONNX-ML: {matches}/3 coinciden")
     except Exception as e:
-        print(f"  ⚠️  Verificación: {e}")
+        print(f"  ⚠️  Verification: {e}")
 
-    # Metadata JSON
+    # ── Metadata JSON ─────────────────────────────────────────────────────────
     meta = {
         "source": pkl_path.name,
-        "n_features": n_features,
+        "n_features_input": n_features,
+        "n_features_transformed": n_transformed,
         "feature_names": feature_names or [],
         **extra_meta,
     }
@@ -499,17 +568,158 @@ def export_pkl(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _is_reverse_logic_artifact(obj: object) -> bool:
+    """
+    Detects if the loaded object from the .pkl is an artifact of ReverseLogicTabularModel.
+    Minimum criterion: dict with key 'pipelines' that is also a dict.
+    """
+    return (
+        isinstance(obj, dict)
+        and "pipelines" in obj
+        and isinstance(obj["pipelines"], dict)
+    )
+
+
+def _extract_reverse_logic_pipeline(
+    artifact: dict,
+) -> tuple[object | None, dict, list[str], int | None]:
+    """
+    Extracts the best exportable pipeline from a ReverseLogicTabularModel artifact.
+
+    Selection strategy (in order of priority):
+      1. Pipeline with highest F1 score in saved metrics
+      2. First available pipeline as fallback
+
+    Order of preference by ONNX exportability:
+      random_forest > xgboost > lightgbm
+      (lightgbm needs additional converter)
+
+    Returns:
+        (pipeline, extra_meta, feature_names_list, n_features)
+        pipeline is None if there is no exportable one.
+    """
+    pipelines: dict = artifact["pipelines"]
+    metrics: dict = artifact.get("metrics", {})
+    feature_names_by_type: dict = artifact.get("feature_names", {})
+    numeric_features: list = artifact.get("numeric_features", [])
+    categorical_features: list = artifact.get("categorical_features", [])
+    target: str = artifact.get("target", "unknown")
+
+    if not pipelines:
+        print("  ❌ The artifact does not contain any trained pipelines")
+        return None, {}, [], None
+
+    best_name: str | None = None
+    best_f1 = -1.0
+
+    for name in pipelines:
+        f1 = metrics.get(name, {}).get("f1", 0.0)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_name = name
+
+    if best_name is None:
+        best_name = next(iter(pipelines))
+
+    best_pipeline = pipelines[best_name]
+
+    scaler_params: dict = {}
+    try:
+        if hasattr(best_pipeline, "preprocessor_"):
+            preprocessor = best_pipeline.preprocessor_
+        elif hasattr(best_pipeline, "named_steps"):
+            preprocessor = best_pipeline.named_steps.get("preprocessor")
+        else:
+            preprocessor = None
+
+        if preprocessor is not None:
+            for t_name, transformer, cols in preprocessor.transformers_:
+                if t_name == "num" and hasattr(transformer, "mean_"):
+                    scaler_params = {
+                        "scaler_mean": transformer.mean_.tolist(),
+                        "scaler_scale": transformer.scale_.tolist(),
+                        "scaler_feature_names": list(cols),
+                    }
+                    print(
+                        f"  📊 StandardScaler params extracted ({len(cols)} features)"
+                    )
+                    break
+    except Exception as e:
+        print(f"  ⚠️  Could not extract scaler params: {e}")
+
+    feature_names_list: list[str] = feature_names_by_type.get(best_name, [])
+
+    if not feature_names_list:
+        try:
+            if hasattr(best_pipeline, "named_steps"):
+                preprocessor = best_pipeline.named_steps["preprocessor"]
+                feature_names_list = preprocessor.get_feature_names_out().tolist()
+            elif hasattr(best_pipeline, "preprocessor_"):
+                feature_names_list = (
+                    best_pipeline.preprocessor_.get_feature_names_out().tolist()
+                )
+        except Exception as e:
+            print(f"  ⚠️  Could not retrieve feature_names: {e}")
+
+    n_features_input = len(numeric_features) + len(categorical_features)
+    if n_features_input == 0:
+        try:
+            if hasattr(best_pipeline, "named_steps"):
+                preprocessor = best_pipeline.named_steps["preprocessor"]
+                n_features_input = int(preprocessor.n_features_in_)
+            elif hasattr(best_pipeline, "preprocessor_"):
+                n_features_input = int(best_pipeline.preprocessor_.n_features_in_)
+        except (Exception, TypeError):
+            n_features_input = None
+
+    extra_meta = {
+        "model_framework": "ReverseLogicTabularModel",
+        "exported_pipeline": best_name,
+        "target": target,
+        "all_pipelines": list(pipelines.keys()),
+        "numeric_features": numeric_features,
+        "categorical_features": categorical_features,
+        "metrics": {
+            name: {k: v for k, v in m.items() if k != "confusion_matrix"}
+            for name, m in metrics.items()
+        },
+        "label_encoders": {
+            name: list(le.classes_)
+            for name, le in artifact.get("label_encoders", {}).items()
+        },
+        **scaler_params,
+    }
+    if best_f1 >= 0:
+        extra_meta["exported_f1"] = round(best_f1, 6)
+
+    print("  💡 ReverseLogicTabularModel detected")
+    print(f"     target       : {target}")
+    print(f"     pipelines    : {list(pipelines.keys())}")
+    print(f"     exporting   : '{best_name}'  (F1={best_f1:.4f})")
+    print(f"     n_features   : {n_features_input}")
+    print(
+        f"     feature_names: {feature_names_list[:5]}{'...' if len(feature_names_list) > 5 else ''}"
+    )
+
+    return best_pipeline, extra_meta, feature_names_list, n_features_input
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  EXPORTAR TODO
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 def export_all():
     """
-    Exporta todos los .pth y .pkl en models/saved.
-    Archivos corruptos o no reconocidos se omiten con aviso.
+    Exports all .pth and .pkl files in models/saved.
+    Corrupted or unrecognized files are skipped with a warning.
     """
     print(f"\n{'═' * 50}")
-    print("  EXPORTANDO TODOS LOS MODELOS")
+    print("  EXPORTING ALL MODELS")
     print(f"{'═' * 50}")
 
     results: dict[str, Path] = {}
@@ -530,17 +740,17 @@ def export_all():
             skipped.append(pkl.name)
 
     print(f"\n{'═' * 50}")
-    print(f"  Exportados: {len(results)}")
+    print(f"  Exported: {len(results)}")
     for name, p in results.items():
         size_mb = p.stat().st_size / (1024 * 1024)
         print(f"  ✅ {name:30s} {size_mb:.2f} MB")
 
     if skipped:
-        print(f"\n  Omitidos: {len(skipped)}")
+        print(f"\n  Skipped: {len(skipped)}")
         for name in skipped:
             print(f"  ⏭️  {name}")
 
-    print(f"\n  Directorio: {ONNX_DIR}")
+    print(f"\n  Directory: {ONNX_DIR}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -550,7 +760,7 @@ def export_all():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Exporta modelos a ONNX / ONNX-ML",
+        description="Exports models to ONNX / ONNX-ML",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Ejemplos:
@@ -564,8 +774,8 @@ Ejemplos:
     )
     parser.add_argument("--pth", type=str, help="Ruta a un .pth")
     parser.add_argument("--pkl", type=str, help="Ruta a un .pkl")
-    parser.add_argument("--n-features", type=int, help="Nº features para .pkl")
-    parser.add_argument("--all", action="store_true", help="Exporta todo")
+    parser.add_argument("--n-features", type=int, help="Nº features for .pkl")
+    parser.add_argument("--all", action="store_true", help="Exports all models")
     args = parser.parse_args()
 
     if args.all:
