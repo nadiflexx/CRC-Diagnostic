@@ -112,3 +112,38 @@ def run_smoking_triage(payload: dict) -> dict | None:
     except requests.ConnectionError:
         st.error("⚠️ No se pudo conectar con el servidor.")
         return None
+
+
+def ensure_db_initialized() -> bool:
+    """
+    Calls the backend /health/init endpoint to guarantee that all
+    database tables exist before the app starts serving requests.
+
+    This is idempotent — safe to call on every app load.
+    Tables are only created if they do not already exist.
+
+    Returns:
+        bool: True if initialization succeeded, False otherwise.
+    """
+    try:
+        resp = requests.get(f"{API_BASE_URL}/health/init", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        created = data.get("tables_created", [])
+        if created:
+            st.toast(
+                f"✅ Database initialized — tables created: {', '.join(created)}",
+                icon="🗄️",
+            )
+        return True
+
+    except requests.ConnectionError:
+        st.error(
+            "⚠️ Cannot connect to the backend. "
+            "Please ensure the server is running on http://localhost:8000"
+        )
+        return False
+    except requests.HTTPError as e:
+        st.error(f"❌ Backend initialization failed: {e}")
+        return False

@@ -807,14 +807,6 @@ def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def render() -> None:
-    """
-    Main entry point for the Patient Management page.
-
-    Renders two tabs:
-    - **Search & Profile**: patient selector, KPI cards, filter controls,
-      visit table, and analytics charts.
-    - **New Registration**: form to create a new patient record via the API.
-    """
     page_header(
         "Patients & Clinical History",
         "Clinical database and longitudinal AI risk tracking.",
@@ -824,111 +816,120 @@ def render() -> None:
     tab_search, tab_new = st.tabs(["📋 Search & Profile", "➕ New Registration"])
 
     with tab_search:
-        patients = get_patients()
+        _render_search_tab()
 
-        if not patients:
-            show_empty_state(
-                "👥",
-                "No patients registered",
-                "Use the 'New Registration' tab to add the first patient.",
-            )
-            return
+    with tab_new:
+        _render_new_patient_tab()
 
-        opts = {
-            f"{p['first_name']} {p['last_name']}  ·  ID {p['id']}": p for p in patients
-        }
-        col_sel, _ = st.columns([1, 3])
-        with col_sel:
-            selected_key = st.selectbox("Search Patient", list(opts.keys()))
-        patient = opts[selected_key]
 
-        st.markdown("<br>", unsafe_allow_html=True)
+def _render_search_tab() -> None:
+    """Search & Profile tab — safe to return early without killing tab_new."""
+    patients = get_patients()
 
-        age = (date.today() - date.fromisoformat(patient["date_of_birth"])).days // 365
-
-        render_profile_card(
-            title="🏥 Patient Record",
-            fields=[
-                ("Full Name", f"{patient['first_name']} {patient['last_name']}"),
-                ("Age", f"{age} years"),
-                ("Sex", patient.get("gender", "N/A").title()),
-                ("BMI", f"{patient.get('bmi', 0):.1f}"),
-                ("Smoking", patient.get("smoking_status", "N/A").title()),
-                ("Alcohol", patient.get("alcohol_consumption", "N/A").title()),
-            ],
+    if not patients:
+        show_empty_state(
+            "👥",
+            "No patients registered",
+            "Use the 'New Registration' tab to add the first patient.",
         )
+        return
 
-        history = get_patient_history(patient["id"])
+    opts = {f"{p['first_name']} {p['last_name']}  ·  ID {p['id']}": p for p in patients}
+    col_sel, _ = st.columns([1, 3])
+    with col_sel:
+        selected_key = st.selectbox("Search Patient", list(opts.keys()))
+    patient = opts[selected_key]
 
-        if not history:
-            show_empty_state(
-                "📊",
-                "No history recorded",
-                "Diagnoses will appear here as a longitudinal timeline.",
-            )
-            return
+    st.markdown("<br>", unsafe_allow_html=True)
 
-        df_raw = pd.DataFrame(history)
-        df_raw["date"] = pd.to_datetime(df_raw["date"])
-        df_raw = df_raw.sort_values("date", ascending=False).reset_index(drop=True)
+    age = (date.today() - date.fromisoformat(patient["date_of_birth"])).days // 365
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        _render_kpis(df_raw, patient)
+    render_profile_card(
+        title="🏥 Patient Record",
+        fields=[
+            ("Full Name", f"{patient['first_name']} {patient['last_name']}"),
+            ("Age", f"{age} years"),
+            ("Sex", patient.get("gender", "N/A").title()),
+            ("BMI", f"{patient.get('bmi', 0):.1f}"),
+            ("Smoking", patient.get("smoking_status", "N/A").title()),
+            ("Alcohol", patient.get("alcohol_consumption", "N/A").title()),
+        ],
+    )
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        df = _apply_filters(df_raw)
+    history = get_patient_history(patient["id"])
 
-        if df.empty:
-            st.info("ℹ️ No visits match the selected filters.")
-            return
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        _render_visit_table(df)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown(
-            "<p style='font-weight:700; color:#2d5a4e; font-size:0.95rem;'>"
-            "📊 Visual History Analysis</p>",
-            unsafe_allow_html=True,
+    if not history:
+        show_empty_state(
+            "📊",
+            "No history recorded",
+            "Diagnoses will appear here as a longitudinal timeline.",
         )
+        return
 
-        if df["multimodal_score"].notna().any() or df["image_score"].notna().any():
-            st.plotly_chart(_chart_risk_timeline(df), width="stretch")
+    df_raw = pd.DataFrame(history)
+    df_raw["date"] = pd.to_datetime(df_raw["date"])
+    df_raw = df_raw.sort_values("date", ascending=False).reset_index(drop=True)
 
-        col_donut, col_heat = st.columns([1, 2], gap="large")
-        with col_donut:
-            st.plotly_chart(_chart_class_distribution(df), width="stretch")
-        with col_heat:
-            fig_heat = _chart_probability_heatmap(df)
-            if fig_heat:
-                st.plotly_chart(fig_heat, width="stretch")
-            else:
-                st.info("No probability data available for the heatmap.")
+    st.markdown("<br>", unsafe_allow_html=True)
+    _render_kpis(df_raw, patient)
 
-        col_bio, col_ens = st.columns([3, 2], gap="large")
-        with col_bio:
-            fig_bio = _chart_biomarkers(df)
-            if fig_bio:
-                st.plotly_chart(fig_bio, width="stretch")
-            else:
-                st.info("No biomarker data available (CEA / Haemoglobin).")
+    st.markdown("<br>", unsafe_allow_html=True)
+    df = _apply_filters(df_raw)
 
-        with col_ens:
-            fig_ens = _chart_ensemble_weights(df)
-            if fig_ens:
-                st.plotly_chart(fig_ens, width="stretch")
-            else:
-                st.info("Insufficient ensemble weight data.")
+    if df.empty:
+        st.info("ℹ️ No visits match the selected filters.")
+        return
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown(
-            "<p style='font-weight:700; color:#2d5a4e; font-size:0.95rem;'>"
-            "⚠️ Cumulative Risk Factors</p>",
-            unsafe_allow_html=True,
-        )
-        _render_risk_factors(df)
+    st.markdown("<br>", unsafe_allow_html=True)
+    _render_visit_table(df)
 
-    with tab_new, st.form("new_patient_form"):
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(
+        "<p style='font-weight:700; color:#2d5a4e; font-size:0.95rem;'>"
+        "📊 Visual History Analysis</p>",
+        unsafe_allow_html=True,
+    )
+
+    if df["multimodal_score"].notna().any() or df["image_score"].notna().any():
+        st.plotly_chart(_chart_risk_timeline(df), width="stretch")
+
+    col_donut, col_heat = st.columns([1, 2], gap="large")
+    with col_donut:
+        st.plotly_chart(_chart_class_distribution(df), width="stretch")
+    with col_heat:
+        fig_heat = _chart_probability_heatmap(df)
+        if fig_heat:
+            st.plotly_chart(fig_heat, width="stretch")
+        else:
+            st.info("No probability data available for the heatmap.")
+
+    col_bio, col_ens = st.columns([3, 2], gap="large")
+    with col_bio:
+        fig_bio = _chart_biomarkers(df)
+        if fig_bio:
+            st.plotly_chart(fig_bio, width="stretch")
+        else:
+            st.info("No biomarker data available (CEA / Haemoglobin).")
+
+    with col_ens:
+        fig_ens = _chart_ensemble_weights(df)
+        if fig_ens:
+            st.plotly_chart(fig_ens, width="stretch")
+        else:
+            st.info("Insufficient ensemble weight data.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(
+        "<p style='font-weight:700; color:#2d5a4e; font-size:0.95rem;'>"
+        "⚠️ Cumulative Risk Factors</p>",
+        unsafe_allow_html=True,
+    )
+    _render_risk_factors(df)
+
+
+def _render_new_patient_tab() -> None:
+    """New patient registration tab — completely isolated from tab_search."""
+    with st.form("new_patient_form"):
         st.subheader("📝 Patient Data")
 
         c1, c2 = st.columns(2)
@@ -973,30 +974,32 @@ def render() -> None:
         )
 
         st.markdown("<br>", unsafe_allow_html=True)
-        submitted = st.form_submit_button("Register Patient", type="primary")
+        submitted = st.form_submit_button("✅ Register Patient", type="primary")
 
-        if submitted:
-            if not first_name.strip() or not last_name.strip():
-                st.error("❌ First name and last name are required.")
-            else:
-                result = create_patient(
-                    {
-                        "first_name": first_name.strip(),
-                        "last_name": last_name.strip(),
-                        "date_of_birth": date_of_birth.isoformat(),
-                        "gender": gender,
-                        "height_cm": height_cm,
-                        "weight_kg": weight_kg,
-                        "smoking_status": smoking,
-                        "alcohol_consumption": alcohol,
-                    }
+    if submitted:
+        if not first_name.strip() or not last_name.strip():
+            st.error("❌ First name and last name are required.")
+        else:
+            result = create_patient(
+                {
+                    "first_name": first_name.strip(),
+                    "last_name": last_name.strip(),
+                    "date_of_birth": date_of_birth.isoformat(),
+                    "gender": gender,
+                    "height_cm": height_cm,
+                    "weight_kg": weight_kg,
+                    "smoking_status": smoking,
+                    "alcohol_consumption": alcohol,
+                }
+            )
+            if result:
+                st.success(
+                    f"✅ Patient **{first_name} {last_name}** "
+                    f"registered with ID **{result.get('id', '?')}**."
                 )
-                if result:
-                    st.success(
-                        f"✅ Patient **{first_name} {last_name}** "
-                        f"registered with ID **{result.get('id', '?')}**."
-                    )
-                    st.balloons()
+                st.balloons()
+            else:
+                st.error("❌ Could not register the patient. Check the backend logs.")
 
 
 render()

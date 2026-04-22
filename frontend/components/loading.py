@@ -4,13 +4,30 @@ Splash Screen & Loading Animation for Endo-AID.
 
 import time
 
+import requests  # type: ignore
 import streamlit as st
+
+API_BASE_URL = "http://localhost:8000"
+
+
+def _initialize_database() -> bool:
+    """
+    Calls /health/init to ensure all DB tables exist.
+    Returns True on success, False on failure.
+    """
+    try:
+        resp = requests.get(f"{API_BASE_URL}/health/init", timeout=10)
+        resp.raise_for_status()
+        return True
+    except (requests.ConnectionError, requests.HTTPError, requests.Timeout):
+        return False
 
 
 def show_splash_screen() -> bool:
     """
     Displays a professional splash loading screen with staged progress.
-    Returns True when complete.
+    Includes DB initialization as a real blocking stage.
+    Returns True when complete, False if backend is unreachable.
     """
     if st.session_state.get("app_loaded", False):
         return True
@@ -18,7 +35,6 @@ def show_splash_screen() -> bool:
     container = st.empty()
 
     with container.container():
-        # Hide sidebar during load
         st.markdown(
             """
             <style>
@@ -61,9 +77,12 @@ def show_splash_screen() -> bool:
             progress = st.progress(0)
             status = st.empty()
 
-            stages = [
+            pre_stages = [
                 ("🔌 Connecting to backend services...", 15),
-                ("🗄️ Loading patient database...", 30),
+                ("🗄️  Checking database integrity...", 30),
+            ]
+
+            post_stages = [
                 ("🧠 Initializing classification models...", 50),
                 ("🔬 Loading U-Net segmentation engine...", 65),
                 ("📊 Preparing analytics pipelines...", 80),
@@ -71,12 +90,40 @@ def show_splash_screen() -> bool:
                 ("✅ System ready", 100),
             ]
 
-            for msg, val in stages:
+            def _render_status(msg: str, val: int, color: str = "#94A3B8") -> None:
                 status.markdown(
-                    f"<p style='text-align:center; color:#94A3B8; font-size:0.95rem;'>{msg}</p>",
+                    f"<p style='text-align:center; color:{color}; font-size:0.95rem;'>{msg}</p>",
                     unsafe_allow_html=True,
                 )
                 progress.progress(val)
+
+            for msg, val in pre_stages:
+                _render_status(msg, val)
+                time.sleep(0.3)
+
+                if "Checking database" in msg:
+                    db_ok = _initialize_database()
+
+                    if not db_ok:
+                        _render_status(
+                            "❌ Cannot reach backend — is the server running?",
+                            val,
+                            color="#ef4444",
+                        )
+                        time.sleep(2)
+                        container.empty()
+                        st.session_state["backend_unreachable"] = True
+                        return False
+
+                    _render_status(
+                        "🗄️  Database ready",
+                        val,
+                        color="#067a5f",
+                    )
+                    time.sleep(0.3)
+
+            for msg, val in post_stages:
+                _render_status(msg, val)
                 time.sleep(0.3)
 
             status.markdown(

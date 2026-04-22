@@ -19,9 +19,19 @@ st.set_page_config(
 apply_custom_css()
 
 # ── Splash Screen ──
+if st.session_state.get("backend_unreachable", False):
+    st.error(
+        "🚫 Could not initialize the application. "
+        "Ensure the backend is running on http://localhost:8000 and refresh."
+    )
+    st.stop()
+
 if "app_loaded" not in st.session_state:
-    show_splash_screen()
-    st.rerun()
+    ok = show_splash_screen()
+    if not ok:
+        st.stop()
+    else:
+        st.rerun()
 
 # ── Shared Sidebar ──
 render_sidebar()

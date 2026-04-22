@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.api.routes import diagnosis, patients, uploads
+from src.api.routes.health import router as health_router
 from src.api.routes.smoking_triage import router as smoking_router
 from src.config.paths import paths
 from src.database.connection import engine
@@ -42,6 +43,7 @@ app.include_router(patients.router)
 app.include_router(uploads.router)
 app.include_router(diagnosis.router)
 app.include_router(smoking_router)
+app.include_router(health_router)
 
 
 @app.get("/health")
