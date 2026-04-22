@@ -101,7 +101,10 @@ def create_patient(patient_data: dict) -> dict | None:
 
 
 def run_smoking_triage(payload: dict) -> dict | None:
-    """Runs the smoking habit triage model via reverse logic."""
+    """
+    Runs the smoking habit triage model.
+    payload must include patient_id alongside biometric fields.
+    """
     try:
         resp = requests.post(
             f"{API_BASE_URL}/diagnosis/smoking-triage",

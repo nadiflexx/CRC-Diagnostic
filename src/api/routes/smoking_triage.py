@@ -1,40 +1,41 @@
 """
 POST /diagnosis/smoking-triage
 
-Triaje de riesgo tabáquico mediante ReverseLogicTabularModel (ONNX-ML).
-Preprocessing manual desde parámetros guardados en el JSON de metadata.
-Fallback a .pkl si ONNX no está disponible.
+Smoking risk triage via ReverseLogic tabular model.
+Persists SmokingTriageResult + Visit(SMOKING_TRIAGE) linked to patient.
 """
 
 from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 import numpy as np
 import pandas as pd
+from sqlalchemy.orm import Session
 
 from src.api.schemas import SmokingTriageRequest, SmokingTriageResponse
 from src.config.logger import log as logger
 from src.config.paths import paths
+from src.database.connection import get_db_dependency
+from src.database.models import SmokingRiskEnum, VisitTypeEnum
+from src.database.repositories import (
+    PatientRepository,
+    SmokingTriageRepository,
+    VisitRepository,
+)
 
 router = APIRouter(prefix="/diagnosis", tags=["Smoking Triage"])
 
 _smoking_model: dict | None = None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Model loading
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def _get_smoking_model() -> dict | None:
-    """
-    Carga el modelo una sola vez (singleton).
-
-    Estrategia:
-      1. ONNX-ML + preprocessing manual desde JSON
-         El JSON contiene scaler_mean, scaler_scale, scaler_feature_names
-         y categorical_features. Con eso reconstruimos el input [1, 13]
-         sin tocar ningún objeto sklearn.
-
-      2. .pkl fallback → ReverseLogicTabularModel completo.
-    """
     global _smoking_model
     if _smoking_model is not None:
         return _smoking_model
@@ -52,35 +53,16 @@ def _get_smoking_model() -> dict | None:
             required = ("scaler_mean", "scaler_scale", "scaler_feature_names")
             missing = [k for k in required if k not in meta]
             if missing:
-                raise ValueError(
-                    f"JSON sin parámetros de scaler: {missing}. "
-                    f"Re-exporta el modelo con export_onnx.py"
-                )
+                raise ValueError(f"JSON missing scaler params: {missing}")
 
             scaler_mean = np.array(meta["scaler_mean"], dtype=np.float64)
             scaler_scale = np.array(meta["scaler_scale"], dtype=np.float64)
-            scaler_feature_names: list[str] = meta["scaler_feature_names"]
-            categorical_features: list[str] = meta.get("categorical_features", ["sex"])
-            numeric_features: list[str] = meta.get(
-                "numeric_features", scaler_feature_names
-            )
+            scaler_feature_names = meta["scaler_feature_names"]
+            categorical_features = meta.get("categorical_features", ["sex"])
+            numeric_features = meta.get("numeric_features", scaler_feature_names)
 
             sess = ort.InferenceSession(
                 str(onnx_path), providers=["CPUExecutionProvider"]
-            )
-
-            _test_X = _build_onnx_input_from_params(
-                row={**dict.fromkeys(numeric_features, 1.0), "sex": 0.0},
-                scaler_mean=scaler_mean,
-                scaler_scale=scaler_scale,
-                scaler_feature_names=scaler_feature_names,
-                categorical_features=categorical_features,
-            )
-            _test_out = sess.run(None, {sess.get_inputs()[0].name: _test_X})
-            logger.info(
-                f"  ✅ ONNX test OK: "
-                f"input={_test_X.shape} "
-                f"outputs={[o.shape for o in _test_out]}"
             )
 
             _smoking_model = {
@@ -98,16 +80,11 @@ def _get_smoking_model() -> dict | None:
                 "metrics": meta.get("metrics", {}),
                 "exported_pipeline": meta.get("exported_pipeline", "xgboost"),
             }
-
-            logger.info(
-                f"✅ Smoking triage: ONNX-ML Runtime "
-                f"(pipeline='{_smoking_model['exported_pipeline']}', "
-                f"n_transformed={_smoking_model['n_features_transformed']})"
-            )
+            logger.info("✅ Smoking triage: ONNX-ML Runtime loaded")
             return _smoking_model
 
         except Exception as e:
-            logger.warning(f"⚠️  ONNX smoking failed: {e} — intentando fallback .pkl")
+            logger.warning(f"⚠️ ONNX smoking failed: {e} — trying .pkl fallback")
 
     pkl_path = paths.REVERSE_LOGIC_MODEL_DIR / "reverse_logic_smk_stat_type_cd.pkl"
     if pkl_path.exists():
@@ -115,13 +92,11 @@ def _get_smoking_model() -> dict | None:
             from src.models.reverse_logic_tabular_model import ReverseLogicTabularModel
 
             model = ReverseLogicTabularModel.load(pkl_path)
-
             best_name = max(
                 model.metrics,
                 key=lambda k: model.metrics[k].get("f1", 0.0),
                 default=next(iter(model.pipelines), "xgboost"),
             )
-
             _smoking_model = {
                 "backend": "pkl",
                 "model": model,
@@ -130,101 +105,51 @@ def _get_smoking_model() -> dict | None:
                 "categorical_features": model.categorical_features,
                 "metrics": model.metrics,
             }
-            logger.info(f"✅ Smoking triage: .pkl fallback (pipeline='{best_name}')")
+            logger.info("✅ Smoking triage: .pkl fallback loaded")
             return _smoking_model
-
         except Exception as e:
             logger.error(f"❌ .pkl fallback failed: {e}")
 
-    logger.error("❌ Smoking triage: ningún modelo disponible")
+    logger.error("❌ Smoking triage: no model available")
     return None
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# PREPROCESSING MANUAL
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+# Preprocessing
+# ─────────────────────────────────────────────────────────────────────────────
 
 
-def _build_onnx_input_from_params(
+def _build_onnx_input(
     row: dict,
     scaler_mean: np.ndarray,
     scaler_scale: np.ndarray,
     scaler_feature_names: list[str],
     categorical_features: list[str],
 ) -> np.ndarray:
-    """
-    Replica el ColumnTransformer manualmente usando solo numpy.
-
-    El ColumnTransformer entrenado hace:
-      1. StandardScaler sobre numeric_features  → n columnas escaladas
-      2. OneHotEncoder sobre categorical_features → m columnas OHE
-
-    Para este modelo concreto:
-      - 11 numéricas → StandardScaler → 11 escaladas
-      - 1 categórica (sex: 0=Female, 1=Male) → OHE → 2 cols [Female, Male]
-      Total: 13 features transformadas
-
-    Args:
-        row:                   dict con nombres brutos y valores float
-        scaler_mean:           mean_ del StandardScaler  shape (11,)
-        scaler_scale:          scale_ del StandardScaler shape (11,)
-        scaler_feature_names:  nombres en orden del StandardScaler
-        categorical_features:  nombres de features categóricas (["sex"])
-
-    Returns:
-        np.ndarray float32 shape (1, 13)
-    """
-    numeric_vals = np.array(
-        [row[f] for f in scaler_feature_names],
-        dtype=np.float64,
-    )
+    numeric_vals = np.array([row[f] for f in scaler_feature_names], dtype=np.float64)
     scaled = (numeric_vals - scaler_mean) / scaler_scale
-
     ohe_parts: list[np.ndarray] = []
     for cat_feat in categorical_features:
         val = int(row.get(cat_feat, 0))
-        if cat_feat == "sex":
-            ohe = np.zeros(2, dtype=np.float64)
-            ohe[val] = 1.0
-            ohe_parts.append(ohe)
-        else:
-            ohe = np.array([1.0 - val, float(val)], dtype=np.float64)
-            ohe_parts.append(ohe)
-
+        ohe = np.zeros(2, dtype=np.float64)
+        ohe[val] = 1.0
+        ohe_parts.append(ohe)
     ohe_array = (
         np.concatenate(ohe_parts) if ohe_parts else np.array([], dtype=np.float64)
     )
-
-    X = np.concatenate([scaled, ohe_array]).astype(np.float32).reshape(1, -1)
-
-    return X
+    return np.concatenate([scaled, ohe_array]).astype(np.float32).reshape(1, -1)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# INFERENCIA
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-def _infer_onnx(smoking_model: dict, row: dict) -> tuple[float, float]:
-    """
-    Inferencia ONNX con preprocessing manual puro numpy.
-    No usa ningún objeto sklearn en runtime.
-    """
-    sess = smoking_model["session"]
-    input_name = sess.get_inputs()[0].name
-
-    X = _build_onnx_input_from_params(
-        row=row,
-        scaler_mean=smoking_model["scaler_mean"],
-        scaler_scale=smoking_model["scaler_scale"],
-        scaler_feature_names=smoking_model["scaler_feature_names"],
-        categorical_features=smoking_model["categorical_features"],
+def _infer_onnx(m: dict, row: dict) -> tuple[float, float]:
+    sess = m["session"]
+    X = _build_onnx_input(
+        row,
+        m["scaler_mean"],
+        m["scaler_scale"],
+        m["scaler_feature_names"],
+        m["categorical_features"],
     )
-
-    logger.debug(f"  ONNX input shape={X.shape} dtype={X.dtype} values={X[0][:5]}...")
-
-    outputs = sess.run(None, {input_name: X})
-
+    outputs = sess.run(None, {sess.get_inputs()[0].name: X})
     if len(outputs) > 1:
         proba = outputs[1]
         if isinstance(proba, list):
@@ -234,37 +159,24 @@ def _infer_onnx(smoking_model: dict, row: dict) -> tuple[float, float]:
         else:
             prob_yes = 0.5
     else:
-        pred_int = int(outputs[0][0])
-        prob_yes = 0.75 if pred_int == 1 else 0.25
-
-    prob_yes = float(np.clip(prob_yes, 0.0, 1.0))
-    return prob_yes, 1.0 - prob_yes
+        prob_yes = 0.75 if int(outputs[0][0]) == 1 else 0.25
+    return float(np.clip(prob_yes, 0.0, 1.0)), 1.0 - float(np.clip(prob_yes, 0.0, 1.0))
 
 
-def _infer_pkl(smoking_model: dict, row: dict) -> tuple[float, float]:
-    """
-    Inferencia con ReverseLogicTabularModel completo (.pkl).
-    El pipeline incluye preprocessing → sin problemas de tipos.
-    """
-    model = smoking_model["model"]
-    pipeline_name = smoking_model["pipeline_name"]
-    numeric_features: list[str] = smoking_model["numeric_features"]
-    categorical_features: list[str] = smoking_model["categorical_features"]
-    all_features = numeric_features + categorical_features
-
-    df = pd.DataFrame([{f: row[f] for f in all_features}])
-    proba = model.predict_proba(df, model_type=pipeline_name)
-
+def _infer_pkl(m: dict, row: dict) -> tuple[float, float]:
+    model = m["model"]
+    all_feat = m["numeric_features"] + m["categorical_features"]
+    df = pd.DataFrame([{f: row[f] for f in all_feat}])
+    proba = model.predict_proba(df, model_type=m["pipeline_name"])
     return float(proba[0, 1]), float(proba[0, 0])
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# HELPERS DE NEGOCIO
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+# Business helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _compute_row(req: SmokingTriageRequest) -> dict:
-    """Construye el dict de entrada con features derivadas calculadas."""
     whr = (
         req.waist_height_ratio
         if req.waist_height_ratio > 0
@@ -364,23 +276,31 @@ def _recommendation(prob: float) -> str:
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ENDPOINT
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+# Endpoint
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 @router.post("/smoking-triage", response_model=SmokingTriageResponse)
-def smoking_triage(req: SmokingTriageRequest) -> SmokingTriageResponse:
+def smoking_triage(
+    req: SmokingTriageRequest,
+    db: Session = Depends(get_db_dependency),  # noqa: B008
+) -> SmokingTriageResponse:
     """
-    Predice riesgo de tabaquismo desde biomarcadores clínicos.
-    No requiere declaración del hábito tabáquico por parte del paciente.
+    Predict smoking risk from biometric markers.
+    Creates SmokingTriageResult + Visit(SMOKING_TRIAGE) linked to patient.
     """
+    patient = PatientRepository(db).get_by_id(req.patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
     smoking_model = _get_smoking_model()
     if smoking_model is None:
-        raise HTTPException(503, "Smoking triage model not available")
+        raise HTTPException(
+            status_code=503, detail="Smoking triage model not available"
+        )
 
     row = _compute_row(req)
-
     try:
         if smoking_model["backend"] == "onnx":
             prob_yes, prob_no = _infer_onnx(smoking_model, row)
@@ -388,23 +308,60 @@ def smoking_triage(req: SmokingTriageRequest) -> SmokingTriageResponse:
             prob_yes, prob_no = _infer_pkl(smoking_model, row)
     except Exception as e:
         logger.error(f"Smoking triage inference error: {e}", exc_info=True)
-        raise HTTPException(500, f"Inference failed: {e}")  # noqa: B904
+        raise HTTPException(status_code=500, detail=f"Inference failed: {e}")  # noqa: B904
 
-    level, color = _risk_level(prob_yes)
+    level_str, color = _risk_level(prob_yes)
+    indicators = _top_indicators(row)
 
-    logger.info(
-        f"[SmokingTriage] backend={smoking_model['backend']} "
-        f"prob_smoke={prob_yes:.3f} level={level}"
-    )
+    visit_id: int | None = None
+    try:
+        smoking_record = SmokingTriageRepository(db).create(
+            sex=int(req.sex),
+            age=float(req.age),
+            height_cm=float(req.height),
+            weight_kg=float(req.weight),
+            bmi=float(req.BMI),
+            waistline_cm=float(req.waistline),
+            triglyceride_mg_dl=float(req.triglyceride),
+            hdl_mg_dl=float(req.HDL_chole),
+            ldl_mg_dl=float(req.LDL_chole),
+            hemoglobin_g_dl=float(req.hemoglobin),
+            waist_height_ratio=float(row["waist_height_ratio"]),
+            hemoglobin_per_height=float(row["hemoglobin_per_height"]),
+            smoking_probability=round(prob_yes, 4),
+            non_smoking_probability=round(prob_no, 4),
+            predicted_smoker=prob_yes >= 0.5,
+            risk_level=SmokingRiskEnum(level_str),
+            backend=smoking_model["backend"].upper(),
+            top_indicators=indicators,
+        )
+
+        visit = VisitRepository(db).create(
+            patient_id=req.patient_id,
+            visit_type=VisitTypeEnum.SMOKING_TRIAGE,
+            smoking_result_id=smoking_record.id,
+            hemoglobin=float(req.hemoglobin),
+        )
+        visit_id = visit.id
+
+        db.commit()
+        logger.info(
+            f"[SmokingTriage] patient={req.patient_id} "
+            f"visit={visit_id} prob={prob_yes:.3f} level={level_str}"
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[SmokingTriage] DB persist failed: {e}", exc_info=True)
 
     return SmokingTriageResponse(
         smoking_probability=round(prob_yes, 4),
         non_smoking_probability=round(prob_no, 4),
         predicted_smoker=prob_yes >= 0.5,
-        risk_level=level,
+        risk_level=level_str,
         risk_color=color,
         confidence=f"{max(prob_yes, prob_no):.1%}",
         backend=smoking_model["backend"].upper(),
-        top_indicators=_top_indicators(row),
+        top_indicators=indicators,
         recommendation=_recommendation(prob_yes),
+        visit_id=visit_id,
     )

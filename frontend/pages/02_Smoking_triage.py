@@ -1,19 +1,15 @@
 """
 Smoking Risk Triage · Endo-AID
-
-Indirect detection of smoking habits from haematological and anthropometric
-biomarkers without directly questioning the patient. Supports endoscopic
-screening prioritisation decisions.
 """
 
 from __future__ import annotations
 
-from components.banners import show_result_banner
+from components.banners import show_empty_state, show_result_banner
 from components.cards import page_header
 from components.sidebar import render_sidebar
 import streamlit as st
-from utils.api_client import run_smoking_triage
-from utils.helpers import apply_custom_css
+from utils.api_client import get_patients, run_smoking_triage
+from utils.helpers import apply_custom_css, build_patient_options
 
 st.set_page_config(
     page_title="Smoking Risk Triage · Endo-AID",
@@ -24,18 +20,12 @@ apply_custom_css()
 render_sidebar()
 
 _RISK_ICON = {"LOW": "🟢", "MODERATE": "🟠", "HIGH": "🔴"}
-
 _RISK_LABEL = {
     "LOW": "Low Risk — No significant smoking indicators",
     "MODERATE": "Moderate Risk — Possible tobacco exposure",
     "HIGH": "High Risk — Profile consistent with active smoking",
 }
-
-_RISK_LEVEL_MAP = {
-    "LOW": "green",
-    "MODERATE": "orange",
-    "HIGH": "red",
-}
+_RISK_LEVEL_MAP = {"LOW": "green", "MODERATE": "orange", "HIGH": "red"}
 
 _FEATURE_HELP = {
     "sex": "Patient's biological sex.",
@@ -54,19 +44,27 @@ _FEATURE_HELP = {
 
 
 def render() -> None:
-    """
-    Main entry point for the Smoking Risk Triage page.
-
-    Renders the clinical context banner, the biomarker input form, and
-    triggers inference via the backend when the form is submitted.
-    """
     page_header(
         "Smoking Risk Triage",
         "Indirect detection of smoking habit from haematological and "
-        "anthropometric biomarkers. Supports endoscopic screening decisions "
-        "without direct patient questioning.",
+        "anthropometric biomarkers. Supports endoscopic screening decisions.",
         icon="🫁",
     )
+
+    patients = get_patients()
+    if not patients:
+        show_empty_state(
+            "🫁",
+            "No patients registered",
+            "Register at least one patient before running the smoking triage.",
+        )
+        return
+
+    opts = build_patient_options(patients)
+    col_sel, _ = st.columns([1, 2])
+    with col_sel:
+        selected_key = st.selectbox("Patient", list(opts.keys()))
+    patient_id = opts[selected_key]
 
     st.markdown("<br>", unsafe_allow_html=True)
     _render_clinical_context()
@@ -83,16 +81,10 @@ def render() -> None:
         )
 
     if submitted:
-        _run_triage(input_values)
+        _run_triage({**input_values, "patient_id": patient_id})
 
 
 def _render_clinical_context() -> None:
-    """
-    Render an informational banner explaining the clinical purpose of the module.
-
-    Describes the relationship between smoking and colorectal cancer risk,
-    the indirect detection approach, and model performance metrics.
-    """
     st.markdown(
         """
         <div style="
@@ -120,7 +112,6 @@ def _render_clinical_context() -> None:
 
 
 def _render_form_header() -> None:
-    """Render the section title and caption above the biomarker input form."""
     st.markdown(
         "<div class='section-title'>🩺 Patient Clinical Biomarkers</div>",
         unsafe_allow_html=True,
@@ -134,17 +125,6 @@ def _render_form_header() -> None:
 
 
 def _render_input_form() -> dict:
-    """
-    Render the three-column biomarker input form.
-
-    Columns cover demographics / anthropometrics, metabolic markers,
-    and optional derived engineered features. BMI is pre-calculated
-    from weight and height when not manually overridden.
-
-    Returns:
-        Dict mapping feature names to their float values, ready to POST
-        to the ``/diagnosis/smoking-triage`` endpoint.
-    """
     col_demo, col_meta, col_eng = st.columns(3, gap="large")
 
     with col_demo:
@@ -251,8 +231,7 @@ def _render_input_form() -> dict:
         )
         st.markdown(
             "<p style='font-size:0.82rem; color:#6c757d; margin-bottom:1rem;'>"
-            "💡 Leave at <b>0</b> to calculate automatically from the values "
-            "entered in the previous columns.</p>",
+            "💡 Leave at <b>0</b> to calculate automatically.</p>",
             unsafe_allow_html=True,
         )
         waist_height_ratio = st.number_input(
@@ -281,19 +260,14 @@ def _render_input_form() -> dict:
             hemoglobin_per_height if hemoglobin_per_height > 0 else hemoglobin / height
         )
         st.markdown(
-            f"""
-            <div style="
-                background:#f8f9fa; border:1px solid #dee2e6;
-                border-radius:8px; padding:0.85rem 1rem;
-                margin-top:1rem; font-size:0.82rem; color:#495057;
-            ">
-                <b>Calculated values preview:</b><br>
-                <span style="font-family:monospace;">
-                    WHR = {whr_preview:.4f}<br>
-                    Hgb/H = {hph_preview:.5f}
-                </span>
-            </div>
-            """,
+            f'<div style="background:#f8f9fa; border:1px solid #dee2e6;'
+            f"border-radius:8px; padding:0.85rem 1rem; margin-top:1rem;"
+            f'font-size:0.82rem; color:#495057;">'
+            f"<b>Calculated values preview:</b><br>"
+            f'<span style="font-family:monospace;">'
+            f"WHR = {whr_preview:.4f}<br>"
+            f"Hgb/H = {hph_preview:.5f}"
+            f"</span></div>",
             unsafe_allow_html=True,
         )
 
@@ -314,15 +288,6 @@ def _render_input_form() -> dict:
 
 
 def _run_triage(input_values: dict) -> None:
-    """
-    Call the backend smoking triage endpoint and render the results.
-
-    Displays an error message if the backend is unreachable or returns None.
-
-    Args:
-        input_values: Dict of feature names to float values as returned by
-            ``_render_input_form``.
-    """
     with st.spinner("Analysing biometric profile with Reverse Logic model…"):
         res = run_smoking_triage(input_values)
 
@@ -333,22 +298,16 @@ def _run_triage(input_values: dict) -> None:
         )
         return
 
+    visit_id = res.get("visit_id")
+    if visit_id:
+        st.success(
+            f"✅ Result saved — Visit ID **{visit_id}** linked to the selected patient."
+        )
+
     _render_results(res, input_values)
 
 
 def _render_results(res: dict, input_values: dict) -> None:
-    """
-    Render the full triage results panel.
-
-    Displays the result banner, probability metrics, visual gauge,
-    clinical indicators table, input summary, clinical recommendation,
-    and a methodological footnote.
-
-    Args:
-        res: Response dict from the ``/diagnosis/smoking-triage`` endpoint.
-        input_values: Original input dict used to derive computed features
-            for the summary table.
-    """
     st.markdown("<br>", unsafe_allow_html=True)
 
     risk_level = res["risk_level"]
@@ -357,7 +316,6 @@ def _render_results(res: dict, input_values: dict) -> None:
     banner_level = _RISK_LEVEL_MAP.get(risk_level, "green")
 
     show_result_banner(f"{icon} {label}", res["confidence"], banner_level)
-
     st.markdown("<br>", unsafe_allow_html=True)
 
     st.markdown(
@@ -368,15 +326,12 @@ def _render_results(res: dict, input_values: dict) -> None:
     col1.metric("Smoking Probability", f"{res['smoking_probability']:.1%}")
     col2.metric("Non-Smoking Probability", f"{res['non_smoking_probability']:.1%}")
     col3.metric(
-        "Prediction",
-        "🚬 Smoker" if res["predicted_smoker"] else "✅ Non-Smoker",
+        "Prediction", "🚬 Smoker" if res["predicted_smoker"] else "✅ Non-Smoker"
     )
     col4.metric("Inference Backend", f"⚡ {res['backend']}")
 
     st.markdown("<br>", unsafe_allow_html=True)
-
     _render_probability_gauge(res["smoking_probability"], res["risk_color"], risk_level)
-
     st.markdown("<br>", unsafe_allow_html=True)
 
     col_left, col_right = st.columns([3, 2], gap="large")
@@ -386,9 +341,7 @@ def _render_results(res: dict, input_values: dict) -> None:
         _render_input_summary(input_values)
 
     st.markdown("<br>", unsafe_allow_html=True)
-
     _render_clinical_recommendation(res)
-
     st.markdown("<br>", unsafe_allow_html=True)
 
     st.caption(
@@ -401,135 +354,74 @@ def _render_results(res: dict, input_values: dict) -> None:
 
 
 def _render_probability_gauge(prob: float, color: str, level: str) -> None:
-    """
-    Render a visual horizontal gauge bar for the smoking probability.
-
-    The bar is overlaid on three coloured zones (LOW / MODERATE / HIGH)
-    with a vertical marker at the current probability position.
-
-    Args:
-        prob: Smoking probability in [0, 1].
-        color: Hex colour string corresponding to the risk level.
-        level: Risk level string (``"LOW"``, ``"MODERATE"``, or ``"HIGH"``).
-    """
     st.markdown(
         "<div class='section-title'>📈 Smoking Risk Level</div>",
         unsafe_allow_html=True,
     )
     pct = prob * 100
     st.markdown(
-        f"""
-        <div style="position:relative; margin-bottom:0.5rem;">
-            <div style="
-                display:flex; height:28px; border-radius:14px;
-                overflow:hidden; border:1px solid #dee2e6;
-            ">
-                <div style="width:45%; background:rgba(56,142,60,0.25);"></div>
-                <div style="width:25%; background:rgba(245,124,0,0.25);"></div>
-                <div style="width:30%; background:rgba(211,47,47,0.25);"></div>
-            </div>
-            <div style="
-                position:absolute; top:0; left:0;
-                width:{pct:.1f}%; height:28px; border-radius:14px;
-                background:{color}; opacity:0.85;
-                transition:width 0.5s ease;
-            "></div>
-            <div style="
-                position:absolute; top:-6px;
-                left:calc({pct:.1f}% - 1px);
-                width:2px; height:40px;
-                background:{color};
-            "></div>
-        </div>
-        <div style="
-            display:flex; justify-content:space-between;
-            font-size:0.75rem; color:#6c757d;
-            margin-top:0.25rem; padding:0 2px;
-        ">
-            <span>🟢 Low (&lt;45%)</span>
-            <span>🟠 Moderate (45–70%)</span>
-            <span>🔴 High (&gt;70%)</span>
-        </div>
-        <div style="text-align:center; margin-top:0.5rem;">
-            <span style="font-size:1.4rem; font-weight:700; color:{color};">
-                {pct:.1f}%
-            </span>
-            <span style="font-size:0.85rem; color:#6c757d; margin-left:0.5rem;">
-                probability of active smoking
-            </span>
-        </div>
-        """,
+        f'<div style="position:relative; margin-bottom:0.5rem;">'
+        f'<div style="display:flex; height:28px; border-radius:14px;'
+        f'overflow:hidden; border:1px solid #dee2e6;">'
+        f'<div style="width:45%; background:rgba(56,142,60,0.25);"></div>'
+        f'<div style="width:25%; background:rgba(245,124,0,0.25);"></div>'
+        f'<div style="width:30%; background:rgba(211,47,47,0.25);"></div>'
+        f"</div>"
+        f'<div style="position:absolute; top:0; left:0; width:{pct:.1f}%;'
+        f"height:28px; border-radius:14px; background:{color}; opacity:0.85;"
+        f'transition:width 0.5s ease;"></div>'
+        f'<div style="position:absolute; top:-6px; left:calc({pct:.1f}% - 1px);'
+        f'width:2px; height:40px; background:{color};"></div>'
+        f"</div>"
+        f'<div style="display:flex; justify-content:space-between;'
+        f'font-size:0.75rem; color:#6c757d; margin-top:0.25rem; padding:0 2px;">'
+        f"<span>🟢 Low (&lt;45%)</span>"
+        f"<span>🟠 Moderate (45–70%)</span>"
+        f"<span>🔴 High (&gt;70%)</span>"
+        f"</div>"
+        f'<div style="text-align:center; margin-top:0.5rem;">'
+        f'<span style="font-size:1.4rem; font-weight:700; color:{color};">'
+        f"{pct:.1f}%</span>"
+        f'<span style="font-size:0.85rem; color:#6c757d; margin-left:0.5rem;">'
+        f"probability of active smoking</span>"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
 
 def _render_clinical_indicators(indicators: list[dict]) -> None:
-    """
-    Render a list of clinical indicator rows with flag icons and values.
-
-    Each indicator is displayed as a coloured card: red when the flag is
-    raised (abnormal range associated with smoking), green otherwise.
-
-    Args:
-        indicators: List of indicator dicts, each containing ``name``,
-            ``value``, ``flag`` (bool), and ``note`` keys.
-    """
     st.markdown(
         "<div class='section-title'>🔬 Analysed Clinical Indicators</div>",
         unsafe_allow_html=True,
     )
-
     for ind in indicators:
         flagged = ind.get("flag", False)
         flag_icon = "🔴" if flagged else "🟢"
         flag_color = "#D32F2F" if flagged else "#388E3C"
         flag_bg = "rgba(211,47,47,0.06)" if flagged else "rgba(56,142,60,0.06)"
         flag_border = "#D32F2F" if flagged else "#388E3C"
-
         st.markdown(
-            f"""
-            <div style="
-                background:{flag_bg};
-                border-left: 4px solid {flag_border};
-                border-radius: 6px;
-                padding: 0.55rem 0.9rem;
-                margin-bottom: 0.45rem;
-                display: flex;
-                align-items: center;
-                gap: 0.75rem;
-            ">
-                <span style="font-size:1.1rem;">{flag_icon}</span>
-                <div style="flex:1;">
-                    <div style="font-weight:600; font-size:0.86rem; color:#2d3748;">
-                        {ind["name"]}
-                    </div>
-                    <div style="font-size:0.8rem; color:#6c757d;">{ind["note"]}</div>
-                </div>
-                <div style="
-                    font-weight:700; font-size:0.9rem;
-                    color:{flag_color}; min-width:80px; text-align:right;
-                ">{ind["value"]}</div>
-            </div>
-            """,
+            f'<div style="background:{flag_bg}; border-left:4px solid {flag_border};'
+            f"border-radius:6px; padding:0.55rem 0.9rem; margin-bottom:0.45rem;"
+            f'display:flex; align-items:center; gap:0.75rem;">'
+            f'<span style="font-size:1.1rem;">{flag_icon}</span>'
+            f'<div style="flex:1;">'
+            f'<div style="font-weight:600; font-size:0.86rem; color:#2d3748;">'
+            f"{ind['name']}</div>"
+            f'<div style="font-size:0.8rem; color:#6c757d;">{ind["note"]}</div>'
+            f"</div>"
+            f'<div style="font-weight:700; font-size:0.9rem; color:{flag_color};'
+            f'min-width:80px; text-align:right;">{ind["value"]}</div>'
+            f"</div>",
             unsafe_allow_html=True,
         )
 
 
 def _render_input_summary(input_values: dict) -> None:
-    """
-    Render a compact read-only table summarising the submitted input values.
-
-    Derived features (WHR, Hgb/H) are recalculated here if they were
-    left at 0 in the form.
-
-    Args:
-        input_values: Dict of feature names to float values as submitted.
-    """
     st.markdown(
         "<div class='section-title'>📋 Submitted Data</div>",
         unsafe_allow_html=True,
     )
-
     whr = (
         input_values["waist_height_ratio"]
         if input_values["waist_height_ratio"] > 0
@@ -540,7 +432,6 @@ def _render_input_summary(input_values: dict) -> None:
         if input_values["hemoglobin_per_height"] > 0
         else input_values["hemoglobin"] / input_values["height"]
     )
-
     rows = [
         ("Sex", "Male" if input_values["sex"] == 1 else "Female"),
         ("Age", f"{int(input_values['age'])} years"),
@@ -555,46 +446,26 @@ def _render_input_summary(input_values: dict) -> None:
         ("WHR (calc.)", f"{whr:.4f}"),
         ("Hgb/H (calc.)", f"{hph:.5f}"),
     ]
-
     table_rows = "".join(
-        f"""
-        <tr>
-            <td style="padding:0.3rem 0.6rem; font-size:0.82rem;
-                       color:#6c757d; font-weight:500;">{label}</td>
-            <td style="padding:0.3rem 0.6rem; font-size:0.82rem;
-                       color:#2d3748; font-weight:600;
-                       text-align:right;">{value}</td>
-        </tr>
-        """
+        f"<tr>"
+        f'<td style="padding:0.3rem 0.6rem; font-size:0.82rem;'
+        f'color:#6c757d; font-weight:500;">{label}</td>'
+        f'<td style="padding:0.3rem 0.6rem; font-size:0.82rem;'
+        f'color:#2d3748; font-weight:600; text-align:right;">{value}</td>'
+        f"</tr>"
         for label, value in rows
     )
-
     st.markdown(
-        f"""
-        <div style="
-            background:#f8f9fa; border:1px solid #dee2e6;
-            border-radius:10px; overflow:hidden;
-        ">
-            <table style="width:100%; border-collapse:collapse;">
-                <tbody>{table_rows}</tbody>
-            </table>
-        </div>
-        """,
+        f'<div style="background:#f8f9fa; border:1px solid #dee2e6;'
+        f'border-radius:10px; overflow:hidden;">'
+        f'<table style="width:100%; border-collapse:collapse;">'
+        f"<tbody>{table_rows}</tbody>"
+        f"</table></div>",
         unsafe_allow_html=True,
     )
 
 
 def _render_clinical_recommendation(res: dict) -> None:
-    """
-    Render a colour-coded clinical recommendation box based on the risk level.
-
-    The box title and text colour reflect the urgency:
-    HIGH = red, MODERATE = orange, LOW = green.
-
-    Args:
-        res: Response dict from the smoking triage endpoint, containing
-            ``risk_level`` and ``recommendation`` keys.
-    """
     level = res["risk_level"]
     color_map = {
         "HIGH": ("#FFEBEE", "#D32F2F", "🔴", "Clinical Recommendation — HIGH PRIORITY"),
@@ -602,25 +473,16 @@ def _render_clinical_recommendation(res: dict) -> None:
         "LOW": ("#E8F5E9", "#388E3C", "🟢", "Clinical Recommendation — ROUTINE"),
     }
     bg, border, icon, title = color_map.get(level, color_map["LOW"])
-
     st.markdown(
-        f"""
-        <div style="
-            background:{bg}; border:2px solid {border};
-            border-radius:12px; padding:1.25rem 1.5rem;
-        ">
-            <div style="
-                font-weight:700; font-size:0.95rem; color:{border};
-                margin-bottom:0.75rem; display:flex;
-                align-items:center; gap:0.5rem;
-            ">
-                {icon} {title}
-            </div>
-            <p style="margin:0; font-size:0.88rem; color:#333; line-height:1.7;">
-                {res["recommendation"]}
-            </p>
-        </div>
-        """,
+        f'<div style="background:{bg}; border:2px solid {border};'
+        f'border-radius:12px; padding:1.25rem 1.5rem;">'
+        f'<div style="font-weight:700; font-size:0.95rem; color:{border};'
+        f'margin-bottom:0.75rem; display:flex; align-items:center; gap:0.5rem;">'
+        f"{icon} {title}"
+        f"</div>"
+        f'<p style="margin:0; font-size:0.88rem; color:#333; line-height:1.7;">'
+        f"{res['recommendation']}"
+        f"</p></div>",
         unsafe_allow_html=True,
     )
 
