@@ -5,6 +5,7 @@
 ![Streamlit](https://img.shields.io/badge/Frontend-Streamlit-FF4B4B)
 ![PyTorch](https://img.shields.io/badge/DL-PyTorch-EE4C2C)
 ![XGBoost](https://img.shields.io/badge/ML-XGBoost-blue)
+![LightGBM](https://img.shields.io/badge/ML-LightGBM-green)
 ![PostgreSQL](https://img.shields.io/badge/DB-PostgreSQL-336791)
 ![Docker](https://img.shields.io/badge/Infra-Docker-2496ED)
 
@@ -43,7 +44,7 @@ The system acts as a diagnostic simulator designed to support clinicians in deci
 ### 🧪 Tabular Models
 
 - Tumoral risk model (XGBoost)
-- Smoking/Drinking reverse model
+- Smoking/Drinking reverse model (LightGBM)
 - SHAP explainability
 
 ### 🔗 Multimodal Diagnosis
@@ -58,7 +59,7 @@ The system acts as a diagnostic simulator designed to support clinicians in deci
 - Backend: FastAPI
 - Frontend: Streamlit
 - Database: PostgreSQL
-- ML/DL: PyTorch + XGBoost
+- ML/DL: PyTorch + XGBoost, LightGBM
 - Tracking: MLflow
 
 ---
