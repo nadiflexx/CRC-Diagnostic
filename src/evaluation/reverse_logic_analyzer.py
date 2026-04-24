@@ -330,7 +330,6 @@ class ReverseLogicAnalyzer:
         """
         Plots habit prevalence by country.
         """
-        # Convert Yes/No to binary
         if df[habit_column].dtype == "object":
             habit_binary = (df[habit_column] == "Yes").astype(int)
         else:
@@ -427,7 +426,6 @@ class ReverseLogicAnalyzer:
             ax_top.spines["left"].set_visible(False)
             ax_top.tick_params(axis="x", labelbottom=False)
 
-            # Histogram section
             ax_hist.hist(
                 probs_no,
                 bins=25,

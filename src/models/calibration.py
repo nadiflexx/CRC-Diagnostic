@@ -119,9 +119,6 @@ class TemperatureScaledModel:
         PROB_MAX (float): Hard ceiling for returned probabilities (0.95).
     """
 
-    # Epistemic uncertainty limits: no clinical model can assert 0% or 100%
-    # certainty. Floor/ceiling standard in diagnostic support systems
-    # (FDA AI/ML Guidance 2023 · Jiang et al., Radiology 2012).
     PROB_MIN: float = 0.05
     PROB_MAX: float = 0.95
 

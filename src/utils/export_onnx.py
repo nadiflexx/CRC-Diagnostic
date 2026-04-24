@@ -295,7 +295,6 @@ def export_pth(
     print(f"  Input:  {tuple(dummy.shape)}")
     print(f"  Output: {tuple(ref_out.shape)}")
 
-    # Exportar
     try:
         torch.onnx.export(
             model,
@@ -435,7 +434,7 @@ def export_pkl(
 
     print(f"  n_features: {n_features}")
 
-    n_transformed: int = n_features
+    n_transformed: int = n_features if n_features is not None else 0
 
     if transformed_feature_names:
         n_transformed = len(transformed_feature_names)
@@ -452,7 +451,6 @@ def export_pkl(
         except Exception:
             pass
 
-    # ── XGBoost → ONNX-ML ────────────────────────────────────────────────────
     if "xgboost" in module:
         try:
             onnx_model = convert_xgboost(
@@ -464,7 +462,6 @@ def export_pkl(
             print(f"  ❌ XGBoost export falló: {e}")
             return None
 
-    # ── sklearn Pipeline / estimator → ONNX-ML ───────────────────────────────
     elif "sklearn" in module:
         try:
             onnx_model = convert_sklearn(
@@ -478,7 +475,6 @@ def export_pkl(
             print(f"  ❌ sklearn export falló: {e}")
             return None
 
-    # ── LightGBM → ONNX-ML ───────────────────────────────────────────────────
     elif "lightgbm" in module:
         try:
             onnx_model = convert_sklearn(
@@ -495,7 +491,6 @@ def export_pkl(
             )
             return None
 
-    # ── FeatureWeightedXGBClassifier ───────────────────────────
     elif hasattr(model, "model_") and hasattr(model, "preprocessor_"):
         print(
             "  💡 FeatureWeightedXGBClassifier detected → "
@@ -515,7 +510,6 @@ def export_pkl(
             print(f"  ❌ FeatureWeightedXGBClassifier export failed: {e}")
             return None
 
-    # ── No soportado ──────────────────────────────────────────────────────────
     else:
         print(f"  ⚠️  {model_name} ({module}) not exportable to ONNX-ML")
         if extra_meta:
@@ -525,7 +519,6 @@ def export_pkl(
             print(f"  💾 Metadata → {json_out.name}")
         return None
 
-    # ── Validar grafo ─────────────────────────────────────────────────────────
     try:
         onnx.checker.check_model(onnx.load(str(output)))
         print("  ✅ Grafo ONNX-ML válido")
@@ -533,7 +526,6 @@ def export_pkl(
         print(f"  ❌ Grafo inválido: {e}")
         return None
 
-    # ── Verificar outputs sklearn vs ONNX Runtime ─────────────────────────────
     try:
         _n_verify = (
             n_transformed
@@ -541,7 +533,7 @@ def export_pkl(
             else n_features
         )
         X_verify = np.random.randn(3, _n_verify).astype(np.float32)
-        ref = model.predict(X_verify)
+        ref = model.predict(X_verify)  # type: ignore[union-attr]
         sess = ort.InferenceSession(str(output), providers=["CPUExecutionProvider"])
         ort_pred = sess.run(None, {sess.get_inputs()[0].name: X_verify})[0]
         matches = int(np.sum(ref == ort_pred))
@@ -549,7 +541,6 @@ def export_pkl(
     except Exception as e:
         print(f"  ⚠️  Verification: {e}")
 
-    # ── Metadata JSON ─────────────────────────────────────────────────────────
     meta = {
         "source": pkl_path.name,
         "n_features_input": n_features,
@@ -674,7 +665,7 @@ def _extract_reverse_logic_pipeline(
             elif hasattr(best_pipeline, "preprocessor_"):
                 n_features_input = int(best_pipeline.preprocessor_.n_features_in_)
         except (Exception, TypeError):
-            n_features_input = None
+            n_features_input = 0
 
     extra_meta = {
         "model_framework": "ReverseLogicTabularModel",

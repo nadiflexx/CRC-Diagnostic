@@ -16,7 +16,6 @@ def render_sidebar() -> None:
       3. Footer         (order: 20, margin-top: auto → pushed to bottom)
     """
     with st.sidebar:
-        # ── Branding (top) ──
         st.markdown(
             """
             <div class="sidebar-brand">
@@ -30,7 +29,6 @@ def render_sidebar() -> None:
             unsafe_allow_html=True,
         )
 
-        # ── Footer  ──
         st.markdown(
             """
             <div class="sidebar-footer">

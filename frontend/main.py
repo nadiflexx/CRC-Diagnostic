@@ -18,7 +18,6 @@ st.set_page_config(
 
 apply_custom_css()
 
-# ── Splash Screen ──
 if st.session_state.get("backend_unreachable", False):
     st.error(
         "🚫 Could not initialize the application. "
@@ -33,11 +32,9 @@ if "app_loaded" not in st.session_state:
     else:
         st.rerun()
 
-# ── Shared Sidebar ──
 render_sidebar()
 
 
-# ── Main Content ──
 def main() -> None:
     page_header(
         "Clinical Decision Support System",

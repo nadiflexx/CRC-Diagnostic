@@ -73,7 +73,6 @@ def find_target_layer(model: nn.Module) -> nn.Module:
     """
     backbone = model.backbone if hasattr(model, "backbone") else model
 
-    # ── Strategy 1: Known named attributes ──
     for attr in ["conv_head", "head", "norm"]:
         if hasattr(backbone, attr):
             layer = getattr(backbone, attr)
@@ -81,7 +80,6 @@ def find_target_layer(model: nn.Module) -> nn.Module:
                 logger.info(f"  🎯 Target: backbone.{attr}")
                 return layer
 
-    # ── Strategy 2: EfficientNet-style blocks ──
     if hasattr(backbone, "blocks"):
         blocks = backbone.blocks
         if len(blocks) > 0:
@@ -95,7 +93,6 @@ def find_target_layer(model: nn.Module) -> nn.Module:
                 logger.info(f"  🎯 Target: backbone.blocks[-1].{name_found}")
                 return last_conv
 
-    # ── Strategy 3: ResNet layer4 ──
     if hasattr(backbone, "layer4"):
         last_conv = None
         for _, module in backbone.layer4[-1].named_modules():
@@ -105,7 +102,6 @@ def find_target_layer(model: nn.Module) -> nn.Module:
             logger.info("  🎯 Target: backbone.layer4[-1] (ResNet)")
             return last_conv
 
-    # ── Strategy 4: Generic fallback (last Conv2d anywhere) ──
     last_conv = None
     last_name = ""
     for name, module in backbone.named_modules():
@@ -165,11 +161,9 @@ def generate_gradcam(
     """
     model.eval()
 
-    # ── Select target layer ──
     if target_layer is None:
         target_layer = find_target_layer(model)
 
-    # ── Get model prediction ──
     with torch.no_grad():
         logits = model(input_tensor)
         pred_class = int(torch.argmax(logits, dim=1).item())
@@ -177,15 +171,13 @@ def generate_gradcam(
     if target_class is None:
         target_class = pred_class
 
-    # ── Compute Grad-CAM ──
     cam_algorithm = CAM_METHODS[method]
     targets = [ClassifierOutputTarget(target_class)]
 
     with cam_algorithm(model=model, target_layers=[target_layer]) as cam:
         grayscale_cam = cam(input_tensor=input_tensor, targets=targets)
 
-    # grayscale_cam shape: (batch, H, W)
-    cam_map = grayscale_cam[0]  # (H, W) in [0, 1]
+    cam_map = grayscale_cam[0]
 
     return cam_map, pred_class
 
@@ -228,10 +220,8 @@ def create_heatmap_overlay(
     """
     h, w = img_rgb.shape[:2]
 
-    # Resize CAM to image size
     cam_resized = cv2.resize(cam, (w, h), interpolation=cv2.INTER_LINEAR)
 
-    # Use pytorch-grad-cam utility for robust blending
     img_normalized = img_rgb.astype(np.float32) / 255.0
     overlay = show_cam_on_image(
         img_normalized,

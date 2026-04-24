@@ -128,7 +128,7 @@ def _fmt(val, fmt: str = ".2f", fallback: str = "—") -> str:
 
 def _mini_stat(icon: str, label: str, value: str) -> str:
     """Generate a single mini stat card as an HTML string."""
-    color = _C["dark"]  # extract first — no dict access inside f-string
+    color = _C["dark"]
     return (
         '<div style="background:white; border:1px solid #d0e8e0;'
         "border-radius:10px; padding:0.45rem 0.75rem; min-width:90px;"
@@ -146,7 +146,6 @@ def _mini_stat(icon: str, label: str, value: str) -> str:
 def _render_patient_header(patient: dict, df_raw: pd.DataFrame) -> None:
     """Full-width professional patient profile card."""
 
-    # ── Compute stats ─────────────────────────────────────────────────────
     age = (date.today() - date.fromisoformat(patient["date_of_birth"])).days // 365
     total_visits = len(df_raw)
 
@@ -175,7 +174,6 @@ def _render_patient_header(patient: dict, df_raw: pd.DataFrame) -> None:
     )
     score_str = f"{last_score:.1%}" if last_score is not None else "N/A"
 
-    # ── Lifestyle maps ────────────────────────────────────────────────────
     smoking_map = {
         "never": "🚭 Never",
         "former": "🚬 Former",
@@ -196,7 +194,6 @@ def _render_patient_header(patient: dict, df_raw: pd.DataFrame) -> None:
     weight_val = patient.get("weight_kg")
     weight_str = f"{weight_val:.0f} kg" if weight_val is not None else "—"
 
-    # ── Risk flags ────────────────────────────────────────────────────────
     flag_items = []
     if patient.get("family_history_ccr"):
         flag_items.append("👨‍👩‍👧 Family CRC")
@@ -339,7 +336,6 @@ def _render_visit_table(df: pd.DataFrame) -> None:
         unsafe_allow_html=True,
     )
 
-    # Header
     st.markdown(
         "<div style='"
         "display:grid;"
@@ -1009,7 +1005,6 @@ def _render_search_tab() -> None:
         )
         return
 
-    # Patient selector
     opts = {f"{p['first_name']} {p['last_name']}  ·  ID {p['id']}": p for p in patients}
     col_sel, _ = st.columns([1, 3])
     with col_sel:
@@ -1035,14 +1030,11 @@ def _render_search_tab() -> None:
             df_raw["colonoscopy_performed"].fillna(False).astype(bool)
         )
 
-    # ── Profile header ────────────────────────────────────────────────────
     _render_patient_header(patient, df_raw)
 
-    # ── KPIs ──────────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     _render_kpis(df_raw)
 
-    # ── Filters ───────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     df = _apply_filters(df_raw)
 
@@ -1050,11 +1042,9 @@ def _render_search_tab() -> None:
         st.info("ℹ️ No visits match the selected filters.")
         return
 
-    # ── Visit table ───────────────────────────────────────────────────────
     _section("📋 Visit History")
     _render_visit_table(df)
 
-    # ── Analytics tabs ────────────────────────────────────────────────────
     _section("📊 Clinical Analytics")
 
     tab_trend, tab_endo, tab_tumor, tab_bio, tab_factors = st.tabs(

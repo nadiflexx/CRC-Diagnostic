@@ -307,7 +307,6 @@ def extract_targz(archive_path: Path) -> tuple[int, int]:
 def unpack_models(archive_path: Path) -> bool:
     """Main extraction entry point. Handles both .zip and .tar.gz."""
 
-    # ── Existence check ───────────────────────────────────────────────────────
     if not archive_path.exists():
         print(f"❌ File not found: {archive_path}")
         print("  Options:")
@@ -315,7 +314,6 @@ def unpack_models(archive_path: Path) -> bool:
         print('    2. Use: uv run src/utils/unpack_models.py --url "https://..."')
         return False
 
-    # ── Format detection ──────────────────────────────────────────────────────
     fmt = detect_format(archive_path)
     diagnosis = diagnose_file(archive_path)
     print(f"\n📦 Archive : {archive_path}")
@@ -326,11 +324,9 @@ def unpack_models(archive_path: Path) -> bool:
         print("   Run with --diagnose for details.")
         return False
 
-    # ── Create output dirs ────────────────────────────────────────────────────
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     ONNX_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ── Extract ───────────────────────────────────────────────────────────────
     print(f"\n🔓 Extracting ({fmt})...")
     try:
         if fmt == "zip":
@@ -359,7 +355,6 @@ def unpack_models(archive_path: Path) -> bool:
         print("\n⚠️  No files extracted! Check the archive structure with --list")
         return False
 
-    # ── Integrity check ───────────────────────────────────────────────────────
     manifest_path = MODELS_DIR / "manifest.json"
     if manifest_path.exists():
         print("\n🔍 Verifying integrity...")
@@ -506,7 +501,6 @@ Examples:
         else:
             archive = ARCHIVE_PATH
 
-    # Download
     if args.url:
         url_path = urlparse(args.url).path
         if url_path.endswith(".zip"):

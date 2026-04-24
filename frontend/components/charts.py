@@ -21,12 +21,10 @@ def plot_risk_timeline(df: pd.DataFrame) -> go.Figure:
 
     fig = go.Figure()
 
-    # Risk zones (background bands)
     fig.add_hrect(y0=0, y1=0.3, fillcolor="#DCFCE7", opacity=0.4, line_width=0)
     fig.add_hrect(y0=0.3, y1=0.5, fillcolor="#FEF3C7", opacity=0.4, line_width=0)
     fig.add_hrect(y0=0.5, y1=1.0, fillcolor="#FECACA", opacity=0.3, line_width=0)
 
-    # Main line
     fig.add_trace(
         go.Scatter(
             x=df["date"],
@@ -45,7 +43,6 @@ def plot_risk_timeline(df: pd.DataFrame) -> go.Figure:
         )
     )
 
-    # Threshold line
     fig.add_hline(
         y=0.5,
         line_dash="dot",

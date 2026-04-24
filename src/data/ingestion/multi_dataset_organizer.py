@@ -401,7 +401,6 @@ class MultiDatasetOrganizer:
         df_clean = df_clean.drop_duplicates()
         df_clean = df_clean.dropna()
 
-        # Drop excluded features
         cols_to_drop = [col for col in REVERSE_DROP_FEATURES if col in df_clean.columns]
         if cols_to_drop:
             df_clean = df_clean.drop(columns=cols_to_drop)

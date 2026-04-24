@@ -39,24 +39,20 @@ class DBSettings(BaseSettings):
 class ModelSettings(BaseSettings):
     """ML/DL model hyperparameters."""
 
-    # Image model
     IMAGE_SIZE: int = 384
     IMAGE_BACKBONE: str = "efficientnet_b4"
     EPOCHS_IMAGE: int = 50
     EPOCHS_SEGMENTER: int = 50
 
-    # Tabular model
-    TABULAR_MODEL_TYPE: str = "xgboost"  # xgboost or lightgbm
+    TABULAR_MODEL_TYPE: str = "xgboost"
     EPOCHS_TABULAR: int = 100
 
-    # Training
     BATCH_SIZE: int = 16
     LEARNING_RATE: float = 5e-5
     WEIGHT_DECAY: float = 1e-4
     NUM_WORKERS: int = 0
 
-    # Device
-    DEVICE: str = "cuda"  # cuda or cpu
+    DEVICE: str = "cuda"
 
     model_config = SettingsConfigDict(
         env_file=_ROOT / ".env",
@@ -71,18 +67,14 @@ class ModelSettings(BaseSettings):
 class DiagnosisSettings(BaseSettings):
     """Diagnosis decision thresholds."""
 
-    # Main classification threshold
     CANCER_THRESHOLD: float = 0.3
 
-    # Risk level thresholds
     RISK_LOW: float = 0.3
     RISK_MODERATE: float = 0.5
     RISK_HIGH: float = 0.7
 
-    # Minimum recall target
     MIN_RECALL_TARGET: float = 0.95
 
-    # Multimodal fusion weights
     FUSION_IMAGE_WEIGHT: float = 0.6
     FUSION_TABULAR_WEIGHT: float = 0.4
 
@@ -104,10 +96,8 @@ class APISettings(BaseSettings):
     API_RELOAD: bool = True
     API_WORKERS: int = 1
 
-    # CORS
     CORS_ORIGINS: list[str] = ["*"]
 
-    # Upload limits
     MAX_UPLOAD_SIZE_MB: int = 50
 
     model_config = SettingsConfigDict(

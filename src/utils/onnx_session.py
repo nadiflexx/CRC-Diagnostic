@@ -49,7 +49,7 @@ class ONNXSession:
             providers = self._select_providers()
 
             opts = ort.SessionOptions()
-            opts.log_severity_level = 3  # silenciar warnings internos de ORT
+            opts.log_severity_level = 3
             opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
             self._sess = ort.InferenceSession(

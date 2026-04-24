@@ -20,6 +20,8 @@ from datetime import datetime
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import shap
 
 from src.config.logger import log as logger
 from src.config.paths import paths
@@ -352,7 +354,6 @@ class ImageExplainer:
         overlay = preprocessed.copy()
         h, w = overlay.shape[:2]
 
-        # ── red semi-transparent highlight ───────────────────────────
         binary_mask = (instance_mask > 0).astype(np.float32)
         mask_resized = cv2.resize(binary_mask, (w, h), interpolation=cv2.INTER_NEAREST)
 
@@ -366,7 +367,6 @@ class ImageExplainer:
         idx = mask_resized > 0.5
         overlay[idx] = cv2.addWeighted(overlay, 0.5, red_layer, 0.5, 0)[idx]
 
-        # ── green contours per instance ───────────────────────────────
         for pid in range(1, n_polyps + 1):
             single = (instance_mask == pid).astype(np.uint8) * 255
             single_rsz = cv2.resize(single, (w, h), interpolation=cv2.INTER_NEAREST)
@@ -517,7 +517,6 @@ class TabularExplainer:
         if plot_type == "beeswarm":
             return self._plot_beeswarm(X, save_path)
 
-        # Default: single-sample bar chart
         explanation = self.explain(X)
         sv = explanation["shap_values"]
 
@@ -566,9 +565,6 @@ class TabularExplainer:
             return plt.figure()
 
         try:
-            import pandas as pd
-            import shap
-
             n = min(2000, len(X))
             rng = np.random.default_rng(42)
             idx = rng.choice(len(X), size=n, replace=False)
@@ -577,7 +573,6 @@ class TabularExplainer:
             shap_values = self._explainer.shap_values(X_sub)
             sv = shap_values if not isinstance(shap_values, list) else shap_values[1]
 
-            # Beeswarm
             fig_bee = plt.figure(figsize=(10, 7))
             shap.summary_plot(
                 sv,
@@ -591,7 +586,6 @@ class TabularExplainer:
                 plt.savefig(save_path, dpi=150, bbox_inches="tight")
             plt.close(fig_bee)
 
-            # Bar importance
             fig_bar = plt.figure(figsize=(8, 6))
             shap.summary_plot(
                 sv,

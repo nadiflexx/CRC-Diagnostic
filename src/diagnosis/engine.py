@@ -110,7 +110,6 @@ class DiagnosisEngine:
         self.ensemble = EnsemblePredictor(device=self.device)
         self.image_segmenter = None
 
-        # Tabular — new model + preprocessor objects
         self.tabular_model: TabularCancerModel | None = None
         self.tabular_preprocessor: TabularPreprocessor | None = None
 
@@ -337,7 +336,6 @@ class DiagnosisEngine:
             "recommendations": [],
         }
 
-        # Image pipeline
         image_prob = None
         img_class = ""
         if image_path and Path(image_path).exists():
@@ -347,7 +345,6 @@ class DiagnosisEngine:
                 image_prob = img_res["prediction_score"]
                 img_class = img_res["prediction_class"]
 
-        # Tabular pipeline
         tabular_prob = None
         if patient_data and (self.tabular_model is not None or self._use_onnx_tabular):
             tab_res = self._analyze_tabular(patient_data)
@@ -355,7 +352,6 @@ class DiagnosisEngine:
                 result["tabular_analysis"] = tab_res
                 tabular_prob = tab_res["prediction_score"]
 
-        # Fusion
         final_score = tabular_prob or 0.0
         if image_prob is not None:
             if img_class == "polyp":
@@ -376,7 +372,7 @@ class DiagnosisEngine:
         return result
 
     # ═══════════════════════════════════════════════
-    #  IMAGE ANALYSIS  (unchanged)
+    #  IMAGE ANALYSIS
     # ═══════════════════════════════════════════════
 
     def _analyze_image(self, image_path: str) -> dict | None:
@@ -537,7 +533,7 @@ class DiagnosisEngine:
         }
 
     # ═══════════════════════════════════════════════
-    #  GRAD-CAM  (unchanged)
+    #  GRAD-CAM)
     # ═══════════════════════════════════════════════
 
     def _generate_gradcam(self, image_bgr, pred_idx, alpha=0.5, beta=0.5) -> dict:
@@ -546,7 +542,7 @@ class DiagnosisEngine:
         return self._image_explainer.generate_gradcam(image_bgr, pred_idx, alpha, beta)
 
     # ═══════════════════════════════════════════════
-    #  SEGMENTATION  (unchanged)
+    #  SEGMENTATION
     # ═══════════════════════════════════════════════
 
     def _run_segmentation(self, original) -> tuple[bool, str | None, int]:
@@ -604,7 +600,7 @@ class DiagnosisEngine:
         return self._image_explainer.postprocess_and_save_mask(mask_np, preprocessed)
 
     # ═══════════════════════════════════════════════
-    #  TABULAR ANALYSIS  (new logic)
+    #  TABULAR ANALYSIS
     # ═══════════════════════════════════════════════
 
     def _analyze_tabular(self, patient_data: dict) -> dict | None:
@@ -688,19 +684,15 @@ class DiagnosisEngine:
             logger.warning("Tabular model not loaded — skipping tabular analysis")
             return None
 
-        # Build model row with correct column names
         row = _build_model_row(patient_data)
         df = pd.DataFrame([row])
 
-        # Ensure all expected feature columns are present
         for feat in self.tabular_preprocessor.feature_names:
             if feat not in df.columns:
                 df[feat] = CLINICAL_DEFAULTS.get(feat, 0.0)
 
         X = self.tabular_preprocessor.transform(df)
 
-        # predict_proba returns 1-D array of shape (n_samples,) — P(cancer)
-        # TemperatureScaledModel clips output to [PROB_MIN, PROB_MAX] = [0.05, 0.95]
         prob_array = self.tabular_model.predict_proba(X)
         prob = float(prob_array[0])
 
@@ -734,22 +726,18 @@ class DiagnosisEngine:
         """
         factors = []
 
-        # CEA — check both old and new field names
         cea = patient_data.get("cea_level_ng_ml") or patient_data.get("cea", 0)
         if cea and float(cea) > 5.0:
             factors.append(("Elevated CEA", float(cea)))
 
-        # Haemoglobin — check both field names
         hgb = patient_data.get("hemoglobin_g_dl") or patient_data.get("hemoglobin", 15)
         if hgb and float(hgb) < 12.0:
             factors.append(("Low Haemoglobin", float(hgb)))
 
-        # Smoking history
         smoking = patient_data.get("smoking_history", 0)
         if smoking and int(smoking) == 1:
             factors.append(("Smoking History", 1.0))
 
-        # Radiomic flags
         adc = patient_data.get("pyrad_adc_mean")
         if adc and float(adc) < 1300.0:
             factors.append(("Restricted ADC (tumour pattern)", float(adc)))
@@ -758,7 +746,6 @@ class DiagnosisEngine:
         if entropy and float(entropy) > 6.0:
             factors.append(("High Texture Entropy", float(entropy)))
 
-        # Legacy screening tests
         if patient_data.get("fit_positive"):
             factors.append(("FIT Positive", 1.0))
         if patient_data.get("fobt_positive"):
@@ -767,7 +754,7 @@ class DiagnosisEngine:
         return factors
 
     # ═══════════════════════════════════════════════
-    #  BUSINESS UTILITIES  (unchanged)
+    #  BUSINESS UTILITIES
     # ═══════════════════════════════════════════════
 
     def _get_final_diagnosis_text(self, img_class: str, score: float) -> str:

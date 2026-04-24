@@ -29,7 +29,6 @@ def render_profile_card(title: str, fields: list[tuple[str, str]]) -> None:
     """
     items_html = ""
     for label, value in fields:
-        # Escape any special HTML characters in values
         safe_value = (
             str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         )

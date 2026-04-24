@@ -81,24 +81,18 @@ def train_tabular_pipeline():
             - Evaluation results dictionary as returned by
               ``TabularCancerModel.evaluate``.
     """
-    # 1. Generate data
     logger.info("═══ Generating Clinical Dataset ═══")
     generator = ClinicalDataGenerator(seed=42)
     combined = generator.generate_and_validate()
     logger.info(f"Dataset: {len(combined):,} patients")
 
-    # 2. Preprocess
     logger.info("═══ Preprocessing ═══")
     preprocessor = TabularPreprocessor()
     X, y, feature_names = preprocessor.fit_transform(combined)
 
-    # 3. Anti-leakage check
     logger.info("═══ Anti-Leakage Check ═══")
     validate_data_quality(X, y, feature_names)
 
-    # 4. Split — 80% train+cal / 20% test (stratified), then 15% of
-    #    train+cal reserved as calibration set → ≈68% train / 12% cal / 20% test.
-    #    The calibration set is NEVER seen by XGBoost during fit().
     logger.info("═══ Train/Cal/Test Split ═══")
     X_trainval, X_test, y_trainval, y_test = train_test_split(
         X, y, test_size=0.20, stratify=y, random_state=42
@@ -108,13 +102,12 @@ def train_tabular_pipeline():
     )
     logger.info(f"Train: {len(X_train)} | Cal: {len(X_cal)} | Test: {len(X_test)}")
 
-    # 5–7. Train (Optuna search + Temperature Scaling + threshold)
     logger.info("═══ Training ═══")
     model = TabularCancerModel(model_type="xgboost")
     model.train(
         X_train,
         y_train,
-        X_val=X_cal,  # calibration set for Temperature Scaling + threshold
+        X_val=X_cal,
         y_val=y_cal,
         feature_names=feature_names,
         n_trials=30,
@@ -122,12 +115,10 @@ def train_tabular_pipeline():
         t_minimum=1.5,
     )
 
-    # 8. Evaluate
     logger.info("═══ Evaluation ═══")
     results = model.evaluate(X_test, y_test)
     model.cross_validate(X, y)
 
-    # 9. Explainability — use _base_model for TreeExplainer (raw XGBoost)
     logger.info("═══ Explainability ═══")
     explainer = TabularExplainer(model, feature_names)
     explainer.fit(X_train)
@@ -141,7 +132,6 @@ def train_tabular_pipeline():
         save_path=str(paths.MODELS / "shap_explanation.png"),
     )
 
-    # 10. Save
     logger.info("═══ Saving ═══")
     paths.MODELS.mkdir(parents=True, exist_ok=True)
     model.save(paths.TABULAR_MODEL_PATH)

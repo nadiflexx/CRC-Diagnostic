@@ -151,7 +151,6 @@ class PathSettings(BaseSettings):
     def UPLOAD_IMAGES(self) -> Path:
         return self.DATA / "processed" / "uploads"
 
-    # ── Model artifact paths ──
     @property
     def CLASSIFIER_CHECKPOINT(self) -> Path:
         return self.MODELS / "best_classifier.pth"

@@ -49,12 +49,9 @@ class TabularCancerModel:
                 ``"xgboost"`` is supported. Default is ``"xgboost"``.
         """
         self.model_type = model_type
-        # Public alias kept for SHAP / cross_validate compatibility.
         self.model: Any = None
         self.feature_names: list[str] | None = None
         self.best_threshold: float = 0.5
-        # Initialised to None so load() and predict_proba() are safe
-        # even if called before train().
         self._base_model: Any = None
         self._calibrator: TemperatureScaledModel | None = None
 
@@ -223,30 +220,26 @@ class TabularCancerModel:
             "n_jobs": -1,
         }
 
-        # 1. Fit base XGBoost model
         base_model = xgb.XGBClassifier(**final_params)
         base_model.fit(X_train, y_train)
         logger.info("Final model fitted.")
 
-        # 2. Choose calibration set — prefer held-out val to avoid leakage
         if X_val is not None and y_val is not None:
             cal_X, cal_y = X_val, y_val
         else:
             cal_X, cal_y = X_train, y_train
 
-        # 3. Fit Temperature Scaling calibrator
         logger.info("Fitting Temperature Scaling calibrator...")
         temperature = find_temperature(base_model, cal_X, cal_y, t_minimum)
         self._calibrator = TemperatureScaledModel(base_model, temperature)
         self._base_model = base_model
-        self.model = base_model  # kept for SHAP / cross_validate compatibility
+        self.model = base_model
 
         logger.info(
             f"Temperature Scaling fitted (T={temperature:.4f}, "
             f"T>1 softens distribution)."
         )
 
-        # 4. Calibrate threshold using calibrated probabilities
         self.best_threshold = self._find_optimal_threshold(cal_X, cal_y, recall_target)
         logger.info(f"Best threshold: {self.best_threshold:.2f}")
         logger.info("✅ Tabular model trained")

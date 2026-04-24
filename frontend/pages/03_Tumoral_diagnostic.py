@@ -32,7 +32,6 @@ st.set_page_config(
 apply_custom_css()
 render_sidebar()
 
-# ── Feature configuration ────────────────────────────────────────────────────
 FEATURE_CFG: dict[str, FeatureConfig] = {
     "age_value": {
         "label": "Age (years)",
@@ -129,7 +128,6 @@ FEATURE_CFG: dict[str, FeatureConfig] = {
     },
 }
 
-# Ordered list of feature keys (matches CLINICAL_NUMERIC_FEATURES order)
 FEATURE_ORDER = [
     "age_value",
     "smoking_history",
@@ -169,14 +167,12 @@ def render() -> None:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Input form ───────────────────────────────────────────────────────────
     with st.form("tumor_diagnostic_form"):
         st.markdown(
             "<div class='section-title'>🩻 Hematological Biomarkers and Radiomic Features</div>",
             unsafe_allow_html=True,
         )
 
-        # Render in two-column grid
         input_values: dict[str, float] = {}
         keys = FEATURE_ORDER
         for i in range(0, len(keys), 2):
@@ -213,7 +209,6 @@ def render() -> None:
             "🧠 Calculate Oncological Risk", type="primary", width="stretch"
         )
 
-    # ── Results ──────────────────────────────────────────────────────────────
     if submitted:
         with st.spinner("Computing XGBoost + SHAP model…"):
             payload = {
@@ -239,7 +234,6 @@ def render() -> None:
             lvl,
         )
 
-        # ── Tabular detail ───────────────────────────────────────────────────
         tab_res = res.get("tabular_analysis")
         if tab_res:
             st.markdown(
@@ -264,14 +258,12 @@ def render() -> None:
                 else "Normal",
             )
 
-            # Risk factors
             factors = tab_res.get("top_risk_factors", [])
             if factors:
                 st.markdown("**Detected Risk Factors:**")
                 for name, val in factors:
                     st.markdown(f"- 🔴 **{name}**: `{val:.2f}`")
 
-        # ── Radiomic summary ─────────────────────────────────────────────────
         with st.expander("🔬 Radiomic Features Detail", expanded=False):
             r1, r2, r3, r4 = st.columns(4)
             r1.metric(
@@ -305,7 +297,6 @@ def render() -> None:
                 delta_color="inverse",
             )
 
-        # ── Recommendations ──────────────────────────────────────────────────
         recs = res.get("recommendations", [])
         if recs:
             st.markdown(
@@ -315,7 +306,6 @@ def render() -> None:
             for rec in recs:
                 st.markdown(rec)
 
-        # ── Reference note ───────────────────────────────────────────────────
         st.caption(
             "XGBoost Model + Temperature Scaling trained with sintétic dataset CRC · "
             "Stadification T1–T4 (NCCN 2023 · ESGAR 2022 · Duffy et al. 2021) · "

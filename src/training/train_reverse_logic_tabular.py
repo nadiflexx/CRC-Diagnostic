@@ -366,23 +366,18 @@ class ReverseLogicTrainer:
             target: "Smoking_History" or "Alcohol_Consumption"
             model_types: List of models to train (default: all)
         """
-        # Load data
         full_df, X_train, X_val, X_test, y_train, y_val, y_test = (
             self.load_and_prepare_data(target)
         )
 
-        # Train
         model = self.train_models(
             X_train, y_train, target=target, model_types=model_types
         )
 
-        # Evaluate
         self.evaluate_models(model, X_val, X_test, y_val, y_test, target=target)
 
-        # Analyze
         self.run_analysis(model, X_test, y_test, full_df, target=target)
 
-        # Save
         self.save_model(model, target=target)
 
     def train_both_targets(self, model_types: list | None = None):
