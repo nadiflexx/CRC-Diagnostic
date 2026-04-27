@@ -11,6 +11,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException
 import numpy as np
+import onnxruntime as ort
 import pandas as pd
 from sqlalchemy.orm import Session
 
@@ -39,14 +40,12 @@ def _get_smoking_model() -> dict | None:
     global _smoking_model
     if _smoking_model is not None:
         return _smoking_model
-
-    onnx_path = paths.MODELS / "onnx" / "reverse_logic_smk_stat_type_cd.onnx"
-    json_path = onnx_path.with_suffix(".json")
+    models_path = paths.MODELS
+    onnx_path = models_path / "onnx" / "reverse_logic_smk_stat_type_cd.onnx"
+    json_path = models_path / "reverse_logic_smk_stat_type_cd.json"
 
     if onnx_path.exists() and json_path.exists():
         try:
-            import onnxruntime as ort
-
             with open(json_path) as f:
                 meta: dict = json.load(f)
 
