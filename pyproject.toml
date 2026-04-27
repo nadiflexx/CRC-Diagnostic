@@ -1,0 +1,162 @@
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "frontend*", "scripts*"]
+
+[project]
+name = "crc-diagnostic"
+version = "0.1.0"
+description = "Simulador de diagnóstico médico de cáncer de colon con IA multimodal."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    # ── Core ──
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0",
+    "python-dotenv>=1.0.1",
+    # ── API ──
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "python-multipart>=0.0.9",
+    # ── Base de datos ──
+    "sqlalchemy>=2.0.29",
+    "psycopg2-binary>=2.9.9",
+    "alembic>=1.13.1",
+    # ── Deep Learning ──
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "timm>=1.0.3",
+    "segmentation-models-pytorch>=0.3.3",
+    "albumentations>=1.4.4",
+    # ── ML Tabular ──
+    "xgboost>=2.0.3",
+    "lightgbm>=4.3.0",
+    "scikit-learn>=1.4.2",
+    "imbalanced-learn>=0.12.2",
+    # ── Explicabilidad ──
+    "shap>=0.46.0",
+    "numba>=0.59.0",
+    "llvmlite>=0.42.0",
+    "grad-cam>=1.5.0",
+    # ── Data ──
+    "pandas<3",
+    "numpy>=1.26.0",
+    "scipy>=1.13.0",
+    # ── Visualización ──
+    "matplotlib>=3.8.4",
+    "seaborn>=0.13.2",
+    "plotly>=5.20.0",
+    "opencv-python-headless>=4.9.0",
+    # ── Frontend ──
+    "streamlit>=1.33.0",
+    # ── Ingesta ──
+    "requests>=2.31.0",
+    "tenacity>=8.2.3",
+    "kaggle>=1.6.12",
+    # ── Utilidades ──
+    "joblib>=1.4.0",
+    "pillow>=10.3.0",
+    "tqdm>=4.66.2",
+    "loguru>=0.7.0",
+    "mlflow>=3.10.1",
+    "gdown>=5.2.1",
+    "onnxmltools>=1.16.0",
+    "onnxruntime>=1.24.4",
+    "onnx>=1.21.0",
+    "skl2onnx>=1.20.0",
+    "optuna>=4.8.0",
+]
+
+[project.optional-dependencies]
+synthetic = ["ctgan>=0.10.1"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.5.3,<1.0.0",
+    "mypy>=1.16.0",
+    "pytest>=8.3.0,<9.0.0",
+    "pytest-cov",
+    "ipython",
+    "ipykernel>=7.2.0",
+    "nbformat>=5.10.0",
+]
+
+# ──────────────────────────────────────────────
+# PYTEST
+# ──────────────────────────────────────────────
+[tool.pytest.ini_options]
+pythonpath = ["."]
+minversion = "6.2"
+addopts = "-vvv -s --cov=src --cov-report term-missing"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+# ──────────────────────────────────────────────
+# MYPY
+# ──────────────────────────────────────────────
+[tool.mypy]
+files = ["**/*.py"]
+ignore_missing_imports = true
+python_version = "3.11"
+
+# ──────────────────────────────────────────────
+# RUFF
+# ──────────────────────────────────────────────
+[tool.ruff]
+exclude = [
+    ".git",
+    ".venv",
+    "build",
+    "dist",
+    "__pycache__",
+    "__init__.py",
+    "notebooks",
+]
+line-length = 88
+indent-width = 4
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "A",   # flake8-builtins
+    "B",   # flake8-bugbear
+    "D",   # pydocstyle
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "PD",  # pandas-vet
+    "TID", # flake8-tidy-imports
+    "UP",  # pyupgrade
+]
+ignore = [
+    "D100", # Missing docstring in public module
+    "D104", # Missing docstring in public package
+    "D107", # Missing docstring in __init__
+    "D205", # 1 blank line required between summary line and description
+    "D212", # Multi-line docstring summary should start at the first line
+    "D401", # First line should be in imperative mood
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.isort]
+known-local-folder = ["src", "config", "frontend", "scripts"]
+
+[tool.ruff.lint.pep8-naming]
+classmethod-decorators = ["classmethod", "pydantic.field_validator"]
+
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true

@@ -1,0 +1,34 @@
+# ============================================
+#          RUFF CONFIGURATION
+# ============================================
+
+# Rules selection
+select = [
+    "E",   # Pyflakes Errors / PEP8
+    "F",   # Flake8
+    "I",   # Import sorting (isort integrated)
+    "W",   # Warnings
+    "B",   # Bugbear
+    "UP",  # Pyupgrade
+    "C4",  # Comprehensions
+    "SIM", # Simplifications
+]
+
+ignore = [
+    "E501", # Deactivate line longevity
+]
+
+# Ruff's Formatter integrated
+line-length = 88
+indent-width = 4
+
+[format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+skip-magic-trailing-comma = false
+
+[isort]
+combine-as-imports = true
+known-first-party = ["distribution_platform", "data_models"]
+force-sort-within-sections = true

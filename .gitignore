@@ -1,0 +1,138 @@
+# ============================================
+#  PYTHON CORE
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ============================================
+#  VIRTUAL ENVIRONMENTS
+# ============================================
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ============================================
+#  ENVIRONMENT VARIABLES (CRITICAL)
+# ============================================
+.env
+.env.*
+!.env.example
+
+# ============================================
+#  DATA & ARTIFACTS
+# ============================================
+# Ignore all data by default to keep repo light
+data/raw/*
+data/processed/*
+data/predictions/*
+data/colon_clean/*
+data/colon_processed/*
+data/colon_processed_tissue_only/*
+data/tabular_processed/*
+data/analysis/*
+
+# Keep the folder structure, just ignore content
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/predictions/.gitkeep
+
+# Ignore Logs
+logs/*.log
+
+# Ignore ML Models (Binaries are large)
+models/*.pkl
+models/*.joblib
+modeles/*
+
+# ============================================
+#  IDE & TOOLS
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ============================================
+#  TESTING & QUALITY
+# ============================================
+.coverage
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# ============================================
+#  STREAMLIT
+# ============================================
+# Ignore secrets but keep config
+.streamlit/secrets.toml
+
+# ============================================
+#  DOCUMENTATION GENERATED
+# ============================================
+site/
+
+# ============================================
+#  BLOQUEO ESPECÍFICO DE TU IMAGEN
+# ============================================
+
+# 1. Secretos
+.env
+
+# 2. Caché local de APIs (OpenMeteo / AEMET)
+*.sqlite
+.cache.sqlite
+
+# 3. Reportes de Coverage (Tests)
+.coverage
+coverage.xml
+htmlcov/
+
+# 4. Carpetas generadas por MkDocs (si hiciste build)
+site/
+
+# 5. Deprecado
+deprecated/*
+data_quality_report/*
+gradcam/*
+scripts/*
+# 6. Others
+.kaggle/*
+mlartifacts/*
+models/saved/*
+
+notebooks/*/*.png
+notebooks/*/*.txt
+notebooks/*/*.json
+
+#Todos los .zip
+*.zip
+*.db
+*.gz
+# ============================================
