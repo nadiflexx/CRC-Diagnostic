@@ -1064,19 +1064,17 @@ def _render_search_tab() -> None:
             or df["tabular_score"].notna().any()
         )
         if has_scores:
-            st.plotly_chart(_chart_risk_timeline(df), use_container_width=True)
+            st.plotly_chart(_chart_risk_timeline(df), width="stretch")
         else:
             st.info("No score data available for this selection.")
 
         col_a, col_b = st.columns(2, gap="large")
         with col_a:
-            st.plotly_chart(
-                _chart_visit_type_distribution(df), use_container_width=True
-            )
+            st.plotly_chart(_chart_visit_type_distribution(df), width="stretch")
         with col_b:
             fig_ens = _chart_ensemble_weights(df)
             if fig_ens:
-                st.plotly_chart(fig_ens, use_container_width=True)
+                st.plotly_chart(fig_ens, width="stretch")
             else:
                 st.info(
                     "Not enough data for ensemble weight chart (≥ 2 endoscopy visits needed)."
@@ -1089,13 +1087,11 @@ def _render_search_tab() -> None:
         else:
             col_donut, col_heat = st.columns([1, 2], gap="large")
             with col_donut:
-                st.plotly_chart(
-                    _chart_class_distribution(endo_df), use_container_width=True
-                )
+                st.plotly_chart(_chart_class_distribution(endo_df), width="stretch")
             with col_heat:
                 fig_heat = _chart_probability_heatmap(endo_df)
                 if fig_heat:
-                    st.plotly_chart(fig_heat, use_container_width=True)
+                    st.plotly_chart(fig_heat, width="stretch")
                 else:
                     st.info("No probability data available for heatmap.")
 
@@ -1106,14 +1102,14 @@ def _render_search_tab() -> None:
         else:
             fig_tumor = _chart_tumoral_scores(tumor_df)
             if fig_tumor:
-                st.plotly_chart(fig_tumor, use_container_width=True)
+                st.plotly_chart(fig_tumor, width="stretch")
             else:
                 st.info("No tumoral score data available.")
 
     with tab_bio:
         fig_bio = _chart_biomarkers(df)
         if fig_bio:
-            st.plotly_chart(fig_bio, use_container_width=True)
+            st.plotly_chart(fig_bio, width="stretch")
         else:
             st.info("No biomarker data (CEA / Haemoglobin) recorded.")
 
@@ -1178,7 +1174,7 @@ def _render_new_patient_tab() -> None:
 
         st.markdown("<br>", unsafe_allow_html=True)
         submitted = st.form_submit_button(
-            "✅ Register Patient", type="primary", use_container_width=True
+            "✅ Register Patient", type="primary", width="stretch"
         )
 
     if submitted:
